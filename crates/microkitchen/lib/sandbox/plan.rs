@@ -29,6 +29,9 @@ pub struct SandboxPlan {
     /// Secrets: value and allowed hosts.
     pub secrets: BTreeMap<String, (String, SecretConfig)>,
 
+    /// The kitchen file as read.
+    pub kitchen_text: String,
+
     /// Contents of `/root/kitchen/mise.toml` in the guest.
     pub guest_config: String,
 
@@ -92,6 +95,7 @@ impl SandboxPlan {
             env,
             secrets,
             guest_config: render_guest_config(&text)?,
+            kitchen_text: text,
             egress: None,
         })
     }

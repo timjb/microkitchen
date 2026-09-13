@@ -5,6 +5,7 @@ pub mod build;
 pub mod lifecycle;
 pub mod naming;
 pub mod plan;
+pub mod remodel;
 
 /// Labels put on every sandbox microkitchen creates.
 pub mod labels {

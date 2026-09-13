@@ -84,6 +84,10 @@ path = "tests/broker_restart.rs"
 name = "dialog_backend"
 path = "tests/dialog_backend.rs"
 
+[[test]]
+name = "remodel"
+path = "tests/remodel.rs"
+
 [dependencies]
 anyhow = "1.0.104"
 clap = { version = "4.6.6", features = ["derive", "env"] }
@@ -97,6 +101,7 @@ owo-colors = "4.4.0"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 sha2 = "0.11.0"
+similar = "3.2.0"
 subtle = "2.6.1"
 tempfile = "3.27.0"
 thiserror = "2.0.20"

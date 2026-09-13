@@ -523,7 +523,18 @@ Global: `-C <dir>`, `--home` (`MICROKITCHEN_HOME`, default `~/.microkitchen`),
    | `ports`, `mounts`, `network` preset, image | Recreate | advise or perform `--recreate` |
 
    The SDK's `modify().dry_run()` plan (dispositions, warnings) is shown next to
-   ours.
+   ours, and it decides what is live: in microsandbox 0.6.18 CPU and memory
+   are live only when the runtime's control socket can resize and the target
+   fits the booted capacity, environment changes always need a restart on a
+   running sandbox, and so do added secrets. Groups the dry run marks
+   "requires restart" are applied with `next_start()` and the user is told to
+   run `microkitchen restart`; the rest apply immediately.
+
+   Secret values are compared against the SDK's stored copies (any value sent
+   counts as a rotation), host changes against the recorded config; the
+   environment is diffed against the sandbox's stored env. `state.json` keeps
+   the applied kitchen text for the text diff, and the guest's `mise.toml` is
+   rewritten (or, for a stopped sandbox, at its next start).
 3. Print the TOML text diff (`similar`) and the classification table; confirm
    unless `--yes`.
 4. Apply live changes (`apply()`), persist restart-required ones

@@ -22,6 +22,21 @@ pub struct SandboxState {
     /// The configuration the sandbox currently runs with; `remodel` diffs against it.
     pub applied: KitchenConfig,
 
+    /// The kitchen file's text as last applied, for `remodel`'s text diff.
+    /// Absent for sandboxes created before milestone 6.
+    #[serde(default)]
+    pub applied_text: Option<String>,
+
+    /// Environment variables microkitchen set from the kitchen file. Only
+    /// these may be removed by `remodel`: the image sets its own.
+    #[serde(default)]
+    pub env_keys: Vec<String>,
+
+    /// The guest's `mise.toml` is out of date (changed while the sandbox was
+    /// stopped); written at the next start.
+    #[serde(default)]
+    pub guest_config_pending: bool,
+
     #[serde(default)]
     pub bootstrapped: bool,
 
@@ -98,6 +113,9 @@ mod tests {
             kitchen_file: "/p/mise.toml".into(),
             config_hash: "abc".into(),
             applied: KitchenConfig::default(),
+            applied_text: Some("[tools]\n".into()),
+            env_keys: vec!["GREETING".into()],
+            guest_config_pending: false,
             bootstrapped: false,
             resolver_port: None,
             proxy_port: None,

@@ -16,6 +16,7 @@ use crate::broker::protocol::Mode;
 use crate::config::Project;
 use crate::config::discover::{Discovery, discover};
 use crate::config::schema::NetworkPreset;
+use crate::mise::render::render_guest_config;
 use crate::sandbox::bootstrap;
 use crate::sandbox::build::IMAGE;
 use crate::sandbox::labels;
@@ -292,6 +293,9 @@ async fn create(ctx: &Context, plan: &SandboxPlan) -> Result<Sandbox> {
         kitchen_file: plan.kitchen_file.clone(),
         config_hash: plan.config_hash.clone(),
         applied: plan.config.clone(),
+        applied_text: Some(plan.kitchen_text.clone()),
+        env_keys: plan.env.keys().cloned().collect(),
+        guest_config_pending: false,
         bootstrapped: false,
         resolver_port: plan.egress.as_ref().map(|e| e.resolver_port),
         proxy_port: plan.egress.as_ref().map(|e| e.proxy_port),
@@ -302,12 +306,23 @@ async fn create(ctx: &Context, plan: &SandboxPlan) -> Result<Sandbox> {
 
 /// Start (or connect to) a sandbox after registering it with the broker.
 /// Registering on every start also restores egress after a broker restart.
-async fn start_mediated(ctx: &Context, handle: &SandboxHandle) -> Result<Sandbox> {
-    if let Some(state) = SandboxState::load(&ctx.home, handle.name())? {
+pub(super) async fn start_mediated(ctx: &Context, handle: &SandboxHandle) -> Result<Sandbox> {
+    let state = SandboxState::load(&ctx.home, handle.name())?;
+    if let Some(state) = &state {
         let preset = state.applied.network.preset;
         connect_egress(ctx, handle.name(), &state.kitchen_file, preset, false).await?;
     }
-    lifecycle::start(handle).await
+    let sandbox = lifecycle::start(handle).await?;
+    if let Some(mut state) = state
+        && state.guest_config_pending
+    {
+        // `remodel` changed the kitchen file while the sandbox was stopped.
+        let text = std::fs::read_to_string(&state.kitchen_file)?;
+        lifecycle::write_guest_config(&sandbox, &render_guest_config(&text)?).await?;
+        state.guest_config_pending = false;
+        state.save(&ctx.home)?;
+    }
+    Ok(sandbox)
 }
 
 /// Register the sandbox with the broker (starting the broker if needed). A

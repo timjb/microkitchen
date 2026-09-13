@@ -3,6 +3,7 @@
 mod broker;
 mod lifecycle;
 mod net;
+mod remodel;
 mod validate;
 
 use std::io::IsTerminal;
@@ -304,6 +305,7 @@ pub async fn run(cli: Cli) -> Result<ExitCode> {
         Command::Net(NetCommand::Bindings) => net::bindings(&ctx).await,
         Command::Net(NetCommand::Temp { host }) => net::temp(&ctx, &host).await,
         Command::Net(NetCommand::Resume) => net::resume(&ctx).await,
+        Command::Remodel { yes, recreate } => remodel::run(&ctx, yes, recreate).await,
         Command::Broker(command) => broker::run(&ctx, command).await,
         other => bail!("`microkitchen {}` is not implemented yet", other.name()),
     }
@@ -323,6 +325,7 @@ pub fn export_proxy_secret(cli: &Cli) -> Result<()> {
                 | Command::Shell
                 | Command::Exec { .. }
                 | Command::Bootstrap
+                | Command::Remodel { .. }
         )
     );
     if !may_start_sandbox {
