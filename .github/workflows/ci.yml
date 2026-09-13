@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: Lint and unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      # The VM-free tests run mise (config discovery, environment resolution).
+      - uses: jdx/mise-action@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+
+  integration:
+    name: VM integration tests
+    # Boots microVMs: needs /dev/kvm, so it runs on a self-hosted runner
+    # labelled `kvm`, only on demand and for main.
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    needs: check
+    runs-on: [self-hosted, linux, x64, kvm]
+    timeout-minutes: 60
+    env:
+      # Must match the `microsandbox = "=…"` dependency.
+      MSB_VERSION: v0.6.18
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: jdx/mise-action@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest,just
+      - name: Install microsandbox ${{ env.MSB_VERSION }}
+        # The installer always resolves the latest release; pin ours instead.
+        run: |
+          curl -fsSL -o install.sh \
+            "https://github.com/superradcompany/microsandbox/releases/download/${MSB_VERSION}/install.sh"
+          grep -q '^    get_latest_version$' install.sh || {
+            echo "the microsandbox installer changed; update this step" >&2
+            exit 1
+          }
+          sed -i "s/^    get_latest_version\$/    VERSION=${MSB_VERSION}/" install.sh
+          sh install.sh
+          echo "$HOME/.microsandbox/bin" >> "$GITHUB_PATH"
+      - run: msb --version
+      - name: VM tests
+        run: just test-integration

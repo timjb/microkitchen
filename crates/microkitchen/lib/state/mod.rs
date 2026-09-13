@@ -65,6 +65,11 @@ impl Home {
         self.root.join("config.toml")
     }
 
+    /// `rules.toml`: network rules for every sandbox, after each kitchen's own.
+    pub fn rules_file(&self) -> PathBuf {
+        self.root.join("rules.toml")
+    }
+
     pub fn broker_dir(&self) -> PathBuf {
         self.root.join("broker")
     }

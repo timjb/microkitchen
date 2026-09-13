@@ -1,13 +1,14 @@
-//! Comment-preserving edits to the kitchen file.
+//! Comment-preserving edits to rule lists: the kitchen file's
+//! `[_.microkitchen.network]` and the shared `~/.microkitchen/rules.toml`.
 //!
-//! Used by approval decisions and `microkitchen net allow|deny`. Writers are
-//! serialized through a lock in `~/.microkitchen` and replace the file
-//! atomically.
+//! Used by approval decisions and `microkitchen net allow|deny|revoke`.
+//! Writers are serialized through a lock in `~/.microkitchen` and replace the
+//! file atomically.
 
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
-use toml_edit::{Array, DocumentMut, InlineTable, Item, Table, Value};
+use toml_edit::{Array, DocumentMut, InlineTable, Item, Table, TableLike, Value};
 
 use super::hostpat::HostPattern;
 use crate::state::{Home, write_atomic};
@@ -16,7 +17,7 @@ use crate::state::{Home, write_atomic};
 // Types
 //--------------------------------------------------------------------------------------------------
 
-/// Which list of `[_.microkitchen.network]` to edit.
+/// Which rule list to edit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuleList {
     Allow,
@@ -30,6 +31,15 @@ pub struct RuleChange {
     pub added: bool,
     /// The rule was removed from the opposite list.
     pub removed_from_other: bool,
+}
+
+/// Where the rule lists live in a file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Scope {
+    /// `[_.microkitchen.network]` (or the legacy `[microkitchen.network]`).
+    Kitchen,
+    /// The top level of `rules.toml`.
+    Global,
 }
 
 //--------------------------------------------------------------------------------------------------
@@ -69,15 +79,47 @@ pub fn set_network_rule(
     list: RuleList,
     rule: &HostPattern,
 ) -> Result<RuleChange> {
-    let _lock = home.lock_writers()?;
-    let text =
-        std::fs::read_to_string(file).with_context(|| format!("reading {}", file.display()))?;
-    let (updated, change) = set_network_rule_in(&text, list, rule)
-        .with_context(|| format!("editing {}", file.display()))?;
-    if !change.is_noop() {
-        write_atomic(file, updated.as_bytes())?;
-    }
-    Ok(change)
+    edit_file(
+        home,
+        file,
+        false,
+        |c: &RuleChange| !c.is_noop(),
+        |text| set_rule_in(text, Scope::Kitchen, list, rule),
+    )
+}
+
+/// Put `rule` into `list` of `~/.microkitchen/rules.toml`, creating it.
+pub fn set_global_rule(home: &Home, list: RuleList, rule: &HostPattern) -> Result<RuleChange> {
+    edit_file(
+        home,
+        &home.rules_file(),
+        true,
+        |c: &RuleChange| !c.is_noop(),
+        |text| set_rule_in(text, Scope::Global, list, rule),
+    )
+}
+
+/// Take `rule` out of the kitchen file's `allow` and `deny` lists. Returns
+/// the lists it was removed from (empty when it was in neither).
+pub fn remove_network_rule(home: &Home, file: &Path, rule: &HostPattern) -> Result<Vec<RuleList>> {
+    edit_file(
+        home,
+        file,
+        false,
+        |r: &Vec<RuleList>| !r.is_empty(),
+        |text| remove_rule_in(text, Scope::Kitchen, rule),
+    )
+}
+
+/// Take `rule` out of `~/.microkitchen/rules.toml`.
+pub fn remove_global_rule(home: &Home, rule: &HostPattern) -> Result<Vec<RuleList>> {
+    edit_file(
+        home,
+        &home.rules_file(),
+        true,
+        |r: &Vec<RuleList>| !r.is_empty(),
+        |text| remove_rule_in(text, Scope::Global, rule),
+    )
 }
 
 /// [`set_network_rule`] on a string. Entries are compared as parsed patterns,
@@ -87,29 +129,59 @@ pub fn set_network_rule_in(
     list: RuleList,
     rule: &HostPattern,
 ) -> Result<(String, RuleChange)> {
+    set_rule_in(text, Scope::Kitchen, list, rule)
+}
+
+/// [`remove_network_rule`] on a string; never creates a section.
+pub fn remove_network_rule_in(text: &str, rule: &HostPattern) -> Result<(String, Vec<RuleList>)> {
+    remove_rule_in(text, Scope::Kitchen, rule)
+}
+
+/// Read `file` (empty if `missing_ok` and absent), edit it, and write it back
+/// under the writers' lock if `changed` says so.
+fn edit_file<T>(
+    home: &Home,
+    file: &Path,
+    missing_ok: bool,
+    changed: impl FnOnce(&T) -> bool,
+    edit: impl FnOnce(&str) -> Result<(String, T)>,
+) -> Result<T> {
+    let _lock = home.lock_writers()?;
+    let text = match std::fs::read_to_string(file) {
+        Ok(text) => text,
+        Err(error) if missing_ok && error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) => return Err(error).with_context(|| format!("reading {}", file.display())),
+    };
+    let (updated, result) = edit(&text).with_context(|| format!("editing {}", file.display()))?;
+    if changed(&result) {
+        write_atomic(file, updated.as_bytes())?;
+    }
+    Ok(result)
+}
+
+fn set_rule_in(
+    text: &str,
+    scope: Scope,
+    list: RuleList,
+    rule: &HostPattern,
+) -> Result<(String, RuleChange)> {
     let mut document: DocumentMut = text.parse().context("the file is not valid TOML")?;
-    let network = network_table(&mut document)?
-        .as_table_like_mut()
-        .expect("network_table returns a table");
+    let table: &mut dyn TableLike = match scope {
+        Scope::Kitchen => network_table(&mut document)?
+            .as_table_like_mut()
+            .expect("network_table returns a table"),
+        Scope::Global => document.as_table_mut(),
+    };
 
     let mut change = RuleChange::default();
-    if let Some(other) = network.get_mut(list.other().key()) {
+    if let Some(other) = table.get_mut(list.other().key()) {
         let Some(other) = other.as_array_mut() else {
             bail!("`{}` is not an array", list.other().key());
         };
-        let before = other.len();
-        let first_prefix = other.get(0).and_then(prefix_of);
-        other.retain(|value| !is_rule(value, rule));
-        change.removed_from_other = other.len() != before;
-        // The new first element takes over the old first element's spacing.
-        if change.removed_from_other
-            && let (Some(first), Some(prefix)) = (other.get_mut(0), first_prefix)
-        {
-            first.decor_mut().set_prefix(prefix);
-        }
+        change.removed_from_other = remove_from(other, rule);
     }
 
-    let target = network
+    let target = table
         .entry(list.key())
         .or_insert(Item::Value(Value::Array(Array::new())));
     let Some(target) = target.as_array_mut() else {
@@ -121,6 +193,83 @@ pub fn set_network_rule_in(
     }
 
     Ok((document.to_string(), change))
+}
+
+fn remove_rule_in(text: &str, scope: Scope, rule: &HostPattern) -> Result<(String, Vec<RuleList>)> {
+    let mut document: DocumentMut = text.parse().context("the file is not valid TOML")?;
+    let table: Option<&mut dyn TableLike> = match scope {
+        Scope::Kitchen => {
+            let underscore = document
+                .get("_")
+                .and_then(|u| u.get("microkitchen"))
+                .is_some();
+            let section = if underscore {
+                document
+                    .get_mut("_")
+                    .and_then(|u| u.get_mut("microkitchen"))
+            } else {
+                document.get_mut("microkitchen")
+            };
+            section
+                .and_then(|s| s.get_mut("network"))
+                .and_then(Item::as_table_like_mut)
+        }
+        Scope::Global => Some(document.as_table_mut()),
+    };
+    let mut removed = Vec::new();
+    let Some(table) = table else {
+        return Ok((text.to_owned(), removed));
+    };
+    for list in [RuleList::Allow, RuleList::Deny] {
+        if let Some(array) = table.get_mut(list.key()).and_then(Item::as_array_mut)
+            && remove_from(array, rule)
+        {
+            removed.push(list);
+        }
+    }
+    Ok((document.to_string(), removed))
+}
+
+/// Remove `rule` from `array`; true if it was there.
+///
+/// A comment ending the line before an element is stored in that element's
+/// prefix, so it moves to the next element (or the array's closing space)
+/// instead of disappearing. A new first element takes over the old first
+/// element's spacing.
+fn remove_from(array: &mut Array, rule: &HostPattern) -> bool {
+    let mut removed = false;
+    for index in (0..array.len()).rev() {
+        if !array.get(index).is_some_and(|value| is_rule(value, rule)) {
+            continue;
+        }
+        let prefix = array.get(index).and_then(prefix_of).unwrap_or_default();
+        array.remove(index);
+        removed = true;
+        if index == 0 {
+            if let Some(first) = array.get_mut(0) {
+                first.decor_mut().set_prefix(prefix);
+            }
+            continue;
+        }
+        let Some(newline) = prefix.rfind('\n') else {
+            continue;
+        };
+        let comment = &prefix[..newline];
+        if comment.trim().is_empty() {
+            continue;
+        }
+        match array.get_mut(index) {
+            Some(next) => {
+                let rest = prefix_of(next).unwrap_or_default();
+                next.decor_mut().set_prefix(format!("{comment}{rest}"));
+            }
+            None => {
+                let trailing = array.trailing().as_str().unwrap_or("").to_owned();
+                array.set_trailing(format!("{comment}{trailing}"));
+            }
+        }
+    }
+    removed
 }
 
 /// The network table of the existing microkitchen section, created as
@@ -298,6 +447,59 @@ allow = [
     }
 
     #[test]
+    fn removes_rules_keeping_the_rest() {
+        let text = "\
+[_.microkitchen.network]
+allow = [
+  \"a.com\", # first
+  \"b.com\",
+]
+deny = [\"c.com\"]
+";
+        let (out, removed) = remove_network_rule_in(text, &rule("b.com")).unwrap();
+        assert_eq!(removed, vec![RuleList::Allow]);
+        assert_eq!(out, text.replace("  \"b.com\",\n", ""));
+
+        let (out, removed) = remove_network_rule_in(text, &rule("C.com")).unwrap();
+        assert_eq!(removed, vec![RuleList::Deny]);
+        assert!(out.contains("deny = []"), "{out}");
+    }
+
+    #[test]
+    fn removing_an_absent_rule_changes_nothing() {
+        for text in [
+            "[_.microkitchen.network]\nallow = [\"a.com\"]\n",
+            "[env]\nA = \"1\"\n",
+            "[microkitchen.network]\ndeny = [\"a.com\"]\n",
+        ] {
+            let (out, removed) = remove_network_rule_in(text, &rule("x.com")).unwrap();
+            assert!(removed.is_empty());
+            assert_eq!(out, text);
+        }
+        let (_, removed) = remove_network_rule_in(
+            "[microkitchen.network]\ndeny = [\"a.com\"]\n",
+            &rule("a.com"),
+        )
+        .unwrap();
+        assert_eq!(removed, vec![RuleList::Deny], "legacy sections too");
+    }
+
+    #[test]
+    fn global_rules_live_at_the_top_level() {
+        let (out, change) =
+            set_rule_in("", Scope::Global, RuleList::Allow, &rule("x.com")).unwrap();
+        assert!(change.added);
+        assert_eq!(out, "allow = [\"x.com\"]\n");
+        let (out, change) =
+            set_rule_in(&out, Scope::Global, RuleList::Deny, &rule("x.com")).unwrap();
+        assert!(change.added && change.removed_from_other);
+        assert_eq!(out, "allow = []\ndeny = [\"x.com\"]\n");
+        let (out, removed) = remove_rule_in(&out, Scope::Global, &rule("x.com")).unwrap();
+        assert_eq!(removed, vec![RuleList::Deny]);
+        assert_eq!(out, "allow = []\ndeny = []\n");
+    }
+
+    #[test]
     fn writes_atomically_to_disk() {
         let dir = tempfile::tempdir().unwrap();
         let home = Home::at(dir.path().join("home"));
@@ -314,6 +516,31 @@ allow = [
             set_network_rule(&home, &file, RuleList::Deny, &rule("x.com"))
                 .unwrap()
                 .is_noop()
+        );
+        assert_eq!(
+            remove_network_rule(&home, &file, &rule("x.com")).unwrap(),
+            vec![RuleList::Deny]
+        );
+    }
+
+    #[test]
+    fn the_global_file_is_created_on_first_use() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = Home::at(dir.path().join("home"));
+        assert!(
+            remove_global_rule(&home, &rule("x.com"))
+                .unwrap()
+                .is_empty()
+        );
+        assert!(!home.rules_file().exists(), "removing creates nothing");
+        assert!(
+            set_global_rule(&home, RuleList::Allow, &rule("x.com"))
+                .unwrap()
+                .added
+        );
+        assert_eq!(
+            std::fs::read_to_string(home.rules_file()).unwrap(),
+            "allow = [\"x.com\"]\n"
         );
     }
 }

@@ -409,14 +409,16 @@ Precedence, first match wins:
 2. hard denies (metadata `169.254.169.254`, link-local, multicast, unspecified,
    broadcast) → deny; not promptable
 3. sandbox in **open** mode (bootstrap) → allow
-4. **deny** rules from the kitchen file, against every candidate name and the
-   address
-5. **allow** rules from the kitchen file: a name rule matches only if the
-   candidate name matches *and* the address is bound to that name for this
-   sandbox; address/CIDR rules match the address
-6. **session** decisions (per sandbox, in memory): temporary allows with expiry
-7. prompt
-8. default deny
+4. **rule layers**, in order: the kitchen file, then
+   `~/.microkitchen/rules.toml`. Within a layer **deny** before **allow**, each
+   rule against the address and every candidate name: a name rule matches only
+   if the candidate name matches *and* the address is bound to that name for
+   this sandbox; address/CIDR rules match the address. The first layer with a
+   match decides, so a project's allow overrides a global deny. The kitchen
+   layer includes the built-in allow for `ntp.ubuntu.com`.
+5. **session** decisions (per sandbox, in memory): temporary allows with expiry
+6. prompt
+7. default deny
 
 Coalescing key `(sandbox, name-or-address, port)`; concurrent flows await the
 first requester's outcome.

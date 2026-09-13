@@ -493,7 +493,7 @@ async fn set_label(handle: &SandboxHandle, key: &str, value: &str) {
 
 fn confirm(question: &str) -> Result<bool> {
     if !std::io::stdin().is_terminal() {
-        bail!("{question} Pass --yes to confirm when not running in a terminal.");
+        bail!("not running in a terminal, so nothing can be confirmed; pass --yes to apply");
     }
     eprint!("{question} [y/N] ");
     std::io::stderr().flush()?;

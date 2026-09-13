@@ -22,3 +22,10 @@ test-vm:
 lint:
     cargo fmt --all --check
     cargo clippy --workspace --all-targets -- -D warnings
+
+# What CI runs on hosted runners.
+check: lint test
+
+# Install the microkitchen binary into ~/.cargo/bin.
+install:
+    cargo install --locked --path crates/microkitchen

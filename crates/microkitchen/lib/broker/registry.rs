@@ -72,6 +72,8 @@ pub struct Broker {
     upstreams: Arc<[SocketAddr]>,
     sandboxes: Mutex<HashMap<String, Arc<SandboxEntry>>>,
     approvals: ApprovalQueue,
+    /// `~/.microkitchen/rules.toml`, after each kitchen's own rules.
+    global_rules: RuleSource,
     audit: Audit,
     temp_allow: Duration,
 }
@@ -152,6 +154,7 @@ impl Broker {
             port_range: settings.broker.port_range,
             upstreams: Arc::from(upstreams),
             sandboxes: Mutex::default(),
+            global_rules: RuleSource::global(home.rules_file()),
             temp_allow,
             home,
         }))
@@ -401,9 +404,10 @@ impl Broker {
             return false;
         }
         let rules = entry.rules.current();
+        let global = self.global_rules.current();
         let decision = {
             let session = entry.session.lock().unwrap();
-            decision::decide(&admission, entry.mode(), &rules, &session, now)
+            decision::decide_layered(&admission, entry.mode(), &[&rules, &global], &session, now)
         };
 
         match decision {

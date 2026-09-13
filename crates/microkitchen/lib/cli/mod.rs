@@ -2,6 +2,7 @@
 
 mod broker;
 mod lifecycle;
+mod logs;
 mod net;
 mod remodel;
 mod validate;
@@ -10,7 +11,7 @@ use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use anyhow::{Context as _, Result, bail};
+use anyhow::{Context as _, Result};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use owo_colors::OwoColorize;
 use tracing_subscriber::EnvFilter;
@@ -89,10 +90,13 @@ pub enum Command {
     List,
     /// Show logs.
     Logs {
+        /// The sandbox's `mise bootstrap` log (the default).
         #[arg(long, group = "source")]
         bootstrap: bool,
+        /// The egress broker's log.
         #[arg(long, group = "source")]
         broker: bool,
+        /// The sandbox's own output, from microsandbox.
         #[arg(long, group = "source")]
         sandbox: bool,
     },
@@ -153,8 +157,13 @@ pub enum NetCommand {
     Temp { host: String },
     /// Show the rules in effect.
     Rules,
-    /// Remove a rule.
-    Revoke { rule: String },
+    /// Remove a rule from the allow and deny lists.
+    Revoke {
+        rule: String,
+        /// Remove it from ~/.microkitchen/rules.toml instead.
+        #[arg(long)]
+        global: bool,
+    },
     /// Switch the sandbox between open and enforce mode.
     Mode { mode: BrokerMode },
     /// Leave deny-all after the approval rate limit tripped.
@@ -178,8 +187,11 @@ pub enum BrokerMode {
 
 #[derive(Debug, Subcommand)]
 pub enum BrokerCommand {
+    /// Start the broker in the background (commands that start a sandbox do this too).
     Start,
+    /// Stop the broker; every sandbox loses network access until it runs again.
     Stop,
+    /// Show whether the broker runs and which sandboxes it mediates.
     Status,
     /// Run the daemon in the foreground.
     #[command(hide = true)]
@@ -221,28 +233,6 @@ impl From<BrokerMode> for Mode {
         match mode {
             BrokerMode::Open => Self::Open,
             BrokerMode::Enforce => Self::Enforce,
-        }
-    }
-}
-
-impl Command {
-    fn name(&self) -> &'static str {
-        match self {
-            Self::Up(_) => "up",
-            Self::Shell => "shell",
-            Self::Exec { .. } => "exec",
-            Self::Stop => "stop",
-            Self::Start => "start",
-            Self::Restart => "restart",
-            Self::Down { .. } => "down",
-            Self::Status => "status",
-            Self::List => "list",
-            Self::Logs { .. } => "logs",
-            Self::Bootstrap => "bootstrap",
-            Self::Validate => "validate",
-            Self::Remodel { .. } => "remodel",
-            Self::Net(_) => "net",
-            Self::Broker(_) => "broker",
         }
     }
 }
@@ -305,9 +295,15 @@ pub async fn run(cli: Cli) -> Result<ExitCode> {
         Command::Net(NetCommand::Bindings) => net::bindings(&ctx).await,
         Command::Net(NetCommand::Temp { host }) => net::temp(&ctx, &host).await,
         Command::Net(NetCommand::Resume) => net::resume(&ctx).await,
+        Command::Net(NetCommand::Rules) => net::rules(&ctx),
+        Command::Net(NetCommand::Revoke { rule, global }) => net::revoke(&ctx, &rule, global),
+        Command::Logs {
+            bootstrap: _,
+            broker,
+            sandbox,
+        } => logs::run(&ctx, broker, sandbox).await,
         Command::Remodel { yes, recreate } => remodel::run(&ctx, yes, recreate).await,
         Command::Broker(command) => broker::run(&ctx, command).await,
-        other => bail!("`microkitchen {}` is not implemented yet", other.name()),
     }
 }
 

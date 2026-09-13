@@ -50,6 +50,9 @@ pub enum Reason {
     OpenMode,
     DenyRule(HostPattern),
     AllowRule(HostPattern),
+    /// From `~/.microkitchen/rules.toml`.
+    GlobalDenyRule(HostPattern),
+    GlobalAllowRule(HostPattern),
     Session,
 }
 
@@ -137,13 +140,26 @@ pub fn is_hard_denied(address: IpAddr) -> bool {
     }
 }
 
-/// Precedence, first match wins: malformed, hard denies, open mode, address
-/// rules (deny before allow), then per-candidate verdicts resolved as
-/// design §6.1.
+/// [`decide_layered`] with a single set of rules.
 pub fn decide(
     admission: &Admission,
     mode: Mode,
     rules: &Rules,
+    session: &Session,
+    now: Instant,
+) -> Decision {
+    decide_layered(admission, mode, &[rules], session, now)
+}
+
+/// Precedence, first match wins: malformed, hard denies, open mode, then the
+/// rule layers in order (the kitchen file, then `~/.microkitchen/rules.toml`),
+/// within each layer deny before allow and each rule against the address and
+/// every candidate name; then session grants. Candidates are resolved as
+/// design §6.1.
+pub fn decide_layered(
+    admission: &Admission,
+    mode: Mode,
+    layers: &[&Rules],
     session: &Session,
     now: Instant,
 ) -> Decision {
@@ -166,25 +182,25 @@ pub fn decide(
             ambiguous: false,
         };
     }
-    if let Some(rule) = rules.deny.iter().find(|r| r.matches_address(address)) {
-        return Decision::Deny {
-            reason: Reason::DenyRule(rule.clone()),
-            ambiguous: false,
-        };
-    }
-    if let Some(rule) = rules.allow.iter().find(|r| r.matches_address(address)) {
-        return Decision::Allow {
-            reason: Reason::AllowRule(rule.clone()),
-            ambiguous: false,
-        };
-    }
-
     let candidates: Vec<&Chain> = admission
         .candidates
         .iter()
         .filter(|c| !c.is_empty())
         .collect();
     if candidates.is_empty() {
+        if let Some((allow, reason)) = rule_verdict(address, &[], layers) {
+            return if allow {
+                Decision::Allow {
+                    reason,
+                    ambiguous: false,
+                }
+            } else {
+                Decision::Deny {
+                    reason,
+                    ambiguous: false,
+                }
+            };
+        }
         return if session.allows(&address.to_string(), now) {
             Decision::Allow {
                 reason: Reason::Session,
@@ -199,7 +215,15 @@ pub fn decide(
     // which is what makes a name allowlist meaningful here.
     let verdicts: Vec<(String, Option<(bool, Reason)>)> = candidates
         .iter()
-        .map(|chain| (chain[0].clone(), chain_verdict(chain, rules, session, now)))
+        .map(|chain| {
+            let verdict = rule_verdict(address, chain, layers).or_else(|| {
+                chain
+                    .iter()
+                    .any(|name| session.allows(name, now))
+                    .then_some((true, Reason::Session))
+            });
+            (chain[0].clone(), verdict)
+        })
         .collect();
     let ambiguous = verdicts.len() > 1;
 
@@ -226,28 +250,33 @@ pub fn decide(
     ))
 }
 
-/// One lookup's verdict: denied if any of its names is denied, else allowed
-/// if any is allowed (by rule, then by session), else unknown.
-fn chain_verdict(
-    chain: &[String],
-    rules: &Rules,
-    session: &Session,
-    now: Instant,
-) -> Option<(bool, Reason)> {
-    for name in chain {
-        if let Some(rule) = rules.deny.iter().find(|r| r.matches_name(name)) {
-            return Some((false, Reason::DenyRule(rule.clone())));
+/// The stored verdict for one lookup (`names`, empty when unresolved) of
+/// `address`: the first layer with a matching rule decides, deny before
+/// allow. `None` when no rule matches.
+fn rule_verdict(address: IpAddr, names: &[String], layers: &[&Rules]) -> Option<(bool, Reason)> {
+    for (index, rules) in layers.iter().enumerate() {
+        let global = index > 0;
+        let matches = |rule: &HostPattern| {
+            rule.matches_address(address) || names.iter().any(|n| rule.matches_name(n))
+        };
+        if let Some(rule) = rules.deny.iter().find(|r| matches(r)) {
+            let reason = if global {
+                Reason::GlobalDenyRule(rule.clone())
+            } else {
+                Reason::DenyRule(rule.clone())
+            };
+            return Some((false, reason));
+        }
+        if let Some(rule) = rules.allow.iter().find(|r| matches(r)) {
+            let reason = if global {
+                Reason::GlobalAllowRule(rule.clone())
+            } else {
+                Reason::AllowRule(rule.clone())
+            };
+            return Some((true, reason));
         }
     }
-    for name in chain {
-        if let Some(rule) = rules.allow.iter().find(|r| r.matches_name(name)) {
-            return Some((true, Reason::AllowRule(rule.clone())));
-        }
-    }
-    chain
-        .iter()
-        .any(|name| session.allows(name, now))
-        .then_some((true, Reason::Session))
+    None
 }
 
 //--------------------------------------------------------------------------------------------------
@@ -262,6 +291,8 @@ impl fmt::Display for Reason {
             Self::OpenMode => f.write_str("open-mode"),
             Self::DenyRule(rule) => write!(f, "deny-rule:{rule}"),
             Self::AllowRule(rule) => write!(f, "allow-rule:{rule}"),
+            Self::GlobalDenyRule(rule) => write!(f, "global-deny-rule:{rule}"),
+            Self::GlobalAllowRule(rule) => write!(f, "global-allow-rule:{rule}"),
             Self::Session => f.write_str("session"),
         }
     }
@@ -276,6 +307,77 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
+
+    #[test]
+    fn the_kitchen_file_comes_before_global_rules() {
+        let global = rules(&["*.org"], &["example.com", "203.0.113.0/24"]);
+        let decide = |kitchen: &Rules, adm: &Admission| {
+            decide_layered(
+                adm,
+                Mode::Enforce,
+                &[kitchen, &global],
+                &Session::default(),
+                Instant::now(),
+            )
+        };
+        let kitchen = rules(&["example.com"], &[]);
+        // The project's allow beats a global deny.
+        let d = decide(&kitchen, &admission("198.51.100.1", &["example.com"]));
+        assert!(
+            matches!(
+                d,
+                Decision::Allow {
+                    reason: Reason::AllowRule(_),
+                    ..
+                }
+            ),
+            "{d:?}"
+        );
+        // Global rules apply where the kitchen file says nothing.
+        let d = decide(&kitchen, &admission("198.51.100.1", &["python.org"]));
+        assert!(
+            matches!(
+                d,
+                Decision::Allow {
+                    reason: Reason::GlobalAllowRule(_),
+                    ..
+                }
+            ),
+            "{d:?}"
+        );
+        let d = decide(&kitchen, &admission("203.0.113.9", &[]));
+        assert!(
+            matches!(
+                d,
+                Decision::Deny {
+                    reason: Reason::GlobalDenyRule(_),
+                    ..
+                }
+            ),
+            "{d:?}"
+        );
+        assert_eq!(
+            decide(&kitchen, &admission("198.51.100.1", &["unknown.net"])),
+            Decision::Prompt(PromptKind::Unknown)
+        );
+        // A kitchen deny of the address beats a global allow of the name.
+        let kitchen = rules(&[], &["198.51.100.0/24"]);
+        let d = decide(&kitchen, &admission("198.51.100.1", &["python.org"]));
+        assert!(
+            matches!(
+                d,
+                Decision::Deny {
+                    reason: Reason::DenyRule(_),
+                    ..
+                }
+            ),
+            "{d:?}"
+        );
+        assert_eq!(
+            Reason::GlobalAllowRule("a.org".parse().unwrap()).to_string(),
+            "global-allow-rule:a.org"
+        );
+    }
 
     /// Each name its own lookup.
     fn admission(address: &str, names: &[&str]) -> Admission {
