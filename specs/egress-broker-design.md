@@ -501,6 +501,11 @@ different jobs:
 - **The broker owns the interactive, per-name decisions** — which public
   destinations this workload may reach.
 
+One name is allowed by the broker in every kitchen: `ntp.ubuntu.com`. The
+image's time sync contacts it every few seconds, so without the built-in
+allow every enforced kitchen would prompt about it again and again. It is an
+ordinary allow rule, so a kitchen `deny` for it still wins.
+
 Consequently sandboxes are created with egress permitted broadly at the
 microsandbox layer *except* for the structural denies, so that requests
 reach the broker rather than being refused before any dialog can appear. If
