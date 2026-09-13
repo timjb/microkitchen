@@ -1,6 +1,19 @@
 //! User settings for microkitchen itself: `~/.microkitchen/config.toml`.
+//!
+//! ```toml
+//! mise_version = "2026.9.6"      # mise installed in guests (default: latest)
+//!
+//! [approval]
+//! headless = "deny"              # no dialog available: "deny" or "queue" for `net decide`
+//! timeout_secs = 60              # unanswered approvals deny the flow
+//!
+//! [broker]
+//! port_range = [40000, 49999]    # per-sandbox resolver and proxy ports
+//! upstream_dns = ["1.1.1.1"]     # default: the host's /etc/resolv.conf
+//! ```
 
 use std::fs;
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
@@ -17,6 +30,36 @@ use super::Home;
 pub struct Settings {
     /// mise version installed in the guest (`"2026.9.6"`); latest when unset.
     pub mise_version: Option<String>,
+    pub approval: ApprovalSettings,
+    pub broker: BrokerSettings,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ApprovalSettings {
+    /// What happens when no dialog can be shown. Explicit, never inferred.
+    pub headless: HeadlessFallback,
+    /// Seconds before an unanswered approval denies the flow (not remembered).
+    pub timeout_secs: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HeadlessFallback {
+    /// Deny the flow.
+    #[default]
+    Deny,
+    /// Hold it for `microkitchen net pending` / `net decide`.
+    Queue,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct BrokerSettings {
+    /// Inclusive range for per-sandbox loopback ports.
+    pub port_range: (u16, u16),
+    /// Upstream resolvers (`ip` or `ip:port`); empty means `/etc/resolv.conf`.
+    pub upstream_dns: Vec<String>,
 }
 
 //--------------------------------------------------------------------------------------------------
@@ -44,7 +87,39 @@ impl Settings {
                 bail!("mise_version must look like \"2026.9.6\", got {version:?}");
             }
         }
+        let (low, high) = settings.broker.port_range;
+        if low < 1024 || low > high {
+            bail!("broker.port_range must be [low, high] with 1024 <= low <= high");
+        }
         Ok(settings)
+    }
+}
+
+impl ApprovalSettings {
+    pub fn timeout(&self) -> Duration {
+        Duration::from_secs(self.timeout_secs)
+    }
+}
+
+//--------------------------------------------------------------------------------------------------
+// Trait Implementations
+//--------------------------------------------------------------------------------------------------
+
+impl Default for ApprovalSettings {
+    fn default() -> Self {
+        Self {
+            headless: HeadlessFallback::Deny,
+            timeout_secs: 60,
+        }
+    }
+}
+
+impl Default for BrokerSettings {
+    fn default() -> Self {
+        Self {
+            port_range: (40000, 49999),
+            upstream_dns: Vec::new(),
+        }
     }
 }
 
@@ -68,6 +143,23 @@ mod tests {
         );
         assert!(Settings::parse("mise_version = \"1; rm -rf /\"\n").is_err());
         assert!(Settings::parse("unknown = 1\n").is_err());
+    }
+
+    #[test]
+    fn approval_and_broker_sections() {
+        let s = Settings::parse(
+            "[approval]\nheadless = \"queue\"\ntimeout_secs = 5\n\n[broker]\nport_range = [50000, 50100]\nupstream_dns = [\"1.1.1.1\"]\n",
+        )
+        .unwrap();
+        assert_eq!(s.approval.headless, HeadlessFallback::Queue);
+        assert_eq!(s.approval.timeout(), Duration::from_secs(5));
+        assert_eq!(s.broker.port_range, (50000, 50100));
+        assert!(Settings::parse("[broker]\nport_range = [80, 90]\n").is_err());
+        assert!(Settings::parse("[approval]\nheadless = \"maybe\"\n").is_err());
+        assert_eq!(
+            Settings::default().approval.headless,
+            HeadlessFallback::Deny
+        );
     }
 
     #[test]

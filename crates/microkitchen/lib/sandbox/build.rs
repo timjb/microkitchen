@@ -1,9 +1,12 @@
 //! Mapping a [`SandboxPlan`] onto the microsandbox SDK builder.
 
-use std::net::{IpAddr, Ipv4Addr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
-use microsandbox::Sandbox;
 use microsandbox::sandbox::{NetworkPolicy, NetworkProfile, SandboxBuilder, SecretBuilder};
+use microsandbox::{Sandbox, SecretSource};
+use microsandbox_network::policy::{
+    Action, Destination, Direction, PortRange, Protocol as NetworkProtocol, Rule,
+};
 
 use super::plan::SandboxPlan;
 use crate::config::hostpat::HostPattern;
@@ -87,6 +90,24 @@ pub fn builder(plan: &SandboxPlan) -> SandboxBuilder {
         NetworkPreset::Open => builder.network(|n| n.policy(NetworkPolicy::allow_all())),
     };
 
+    // The broker is the sandbox's resolver and outbound proxy (design §4);
+    // microsandbox keeps the structural denies (design §11).
+    if config.network.preset != NetworkPreset::None
+        && let Some(egress) = &plan.egress
+    {
+        let resolver = SocketAddr::from((Ipv4Addr::LOCALHOST, egress.resolver_port));
+        builder = builder
+            .network(|n| n.dns(|d| d.nameservers([resolver])))
+            .proxy(|p| {
+                p.socks5(format!("127.0.0.1:{}", egress.proxy_port))
+                    .credentials(
+                        plan.name.as_str(),
+                        SecretSource::env(egress.secret_env.as_str()),
+                    )
+            })
+            .prepend_network_policy_rules(structural_rules());
+    }
+
     for port in &config.network.ports {
         builder = match port.protocol {
             Protocol::Tcp => builder.port_bind(PORT_BIND, port.host, port.guest),
@@ -102,6 +123,24 @@ pub fn builder(plan: &SandboxPlan) -> SandboxBuilder {
     }
 
     builder
+}
+
+/// Evaluated by microsandbox before anything reaches the broker: DNS goes only
+/// to the sandbox's own forwarder (and so through the observer), and DNS over
+/// TLS is refused (design §11.1).
+fn structural_rules() -> Vec<Rule> {
+    let deny = |protocols: Vec<NetworkProtocol>, port: u16| Rule {
+        direction: Direction::Egress,
+        destination: Destination::Any,
+        protocols,
+        ports: vec![PortRange::single(port)],
+        action: Action::Deny,
+    };
+    vec![
+        Rule::allow_dns(),
+        deny(vec![NetworkProtocol::Udp, NetworkProtocol::Tcp], 53),
+        deny(vec![NetworkProtocol::Tcp], 853),
+    ]
 }
 
 /// A secret substituted only for its allowed hosts; elsewhere the placeholder

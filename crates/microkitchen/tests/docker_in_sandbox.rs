@@ -5,7 +5,11 @@ use test_utils::{TestKitchen, mk_test, stdout};
 #[mk_test]
 async fn docker_runs_inside_the_sandbox() {
     let k = TestKitchen::new(env!("CARGO_BIN_EXE_microkitchen"));
-    k.write("mise.toml", "[_.microkitchen]\nmemory = \"2G\"\n");
+    // After bootstrap the broker enforces; Docker Hub is allowed by rule.
+    k.write(
+        "mise.toml",
+        "[_.microkitchen]\ncpus = 1\nmemory = \"2G\"\n\n[_.microkitchen.network]\nallow = [\"*.docker.io\", \"*.docker.com\"]\n",
+    );
     k.up();
 
     let root = k.exec(&["sh", "-c", "grep ' / ' /proc/mounts | cut -d ' ' -f 3"]);

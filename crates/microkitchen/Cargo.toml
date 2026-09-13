@@ -44,19 +44,48 @@ path = "tests/labels.rs"
 name = "ports"
 path = "tests/ports.rs"
 
+[[test]]
+name = "network_policy"
+path = "tests/network_policy.rs"
+
+[[test]]
+name = "unresolved_address"
+path = "tests/unresolved_address.rs"
+
+[[test]]
+name = "laundering"
+path = "tests/laundering.rs"
+
+[[test]]
+name = "udp_policy"
+path = "tests/udp_policy.rs"
+
+[[test]]
+name = "resolver_bypass"
+path = "tests/resolver_bypass.rs"
+
+[[test]]
+name = "two_sandboxes"
+path = "tests/two_sandboxes.rs"
+
 [dependencies]
 anyhow = "1.0.104"
 clap = { version = "4.6.6", features = ["derive", "env"] }
+getrandom = "0.4.3"
 hex = "0.4.3"
+hickory-proto = "0.26.3"
 ipnet = "2.12.2"
 microsandbox = "=0.6.18"
+microsandbox-network = "=0.6.18"
 owo-colors = "4.4.0"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 sha2 = "0.11.0"
+subtle = "2.6.1"
 tempfile = "3.27.0"
 thiserror = "2.0.20"
 tokio = { version = "1.53.1", features = ["full"] }
+tokio-util = "0.7.19"
 toml = "1.1.6"
 toml_edit = "0.25.15"
 tracing = "0.1.44"

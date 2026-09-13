@@ -31,6 +31,18 @@ pub struct SandboxPlan {
 
     /// Contents of `/root/kitchen/mise.toml` in the guest.
     pub guest_config: String,
+
+    /// Broker endpoints; set before creation unless the sandbox has no network.
+    pub egress: Option<Egress>,
+}
+
+/// Where the sandbox's DNS and outbound traffic go. Fixed at creation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Egress {
+    pub resolver_port: u16,
+    pub proxy_port: u16,
+    /// Host environment variable holding the SOCKS5 password.
+    pub secret_env: String,
 }
 
 //--------------------------------------------------------------------------------------------------
@@ -80,6 +92,7 @@ impl SandboxPlan {
             env,
             secrets,
             guest_config: render_guest_config(&text)?,
+            egress: None,
         })
     }
 

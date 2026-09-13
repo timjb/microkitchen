@@ -8,6 +8,11 @@ edition = "2024"
 license = "Apache-2.0"
 publish = false
 
+# Every test binary links the whole microsandbox stack; without dependency
+# debug info each is a fraction of the size.
+[profile.dev.package."*"]
+debug = false
+
 [workspace.dependencies]
 test-macros = { path = "crates/test-macros" }
 test-utils = { path = "crates/test-utils" }

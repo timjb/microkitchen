@@ -38,7 +38,7 @@ async fn published_tcp_port_is_reachable_from_the_host() {
     let k = TestKitchen::new(env!("CARGO_BIN_EXE_microkitchen"));
     k.write(
         "mise.toml",
-        &format!("[_.microkitchen]\nmemory = \"1G\"\n\n[_.microkitchen.network]\nports = [\"{port}:8080\"]\n"),
+        &format!("[_.microkitchen]\ncpus = 1\nmemory = \"1G\"\n\n[_.microkitchen.network]\nports = [\"{port}:8080\"]\n"),
     );
     k.up();
 

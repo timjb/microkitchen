@@ -2792,18 +2792,23 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "getrandom 0.4.3",
  "hex",
+ "hickory-proto",
  "ipnet",
  "microsandbox",
+ "microsandbox-network",
  "owo-colors",
  "serde",
  "serde_json",
  "sha2 0.11.0",
+ "subtle",
  "tempfile",
  "test-macros",
  "test-utils",
  "thiserror 2.0.20",
  "tokio",
+ "tokio-util",
  "toml",
  "toml_edit",
  "tracing",
@@ -5234,6 +5239,7 @@ dependencies = [
 name = "test-utils"
 version = "0.1.0"
 dependencies = [
+ "serde_json",
  "tempfile",
  "test-macros",
 ]

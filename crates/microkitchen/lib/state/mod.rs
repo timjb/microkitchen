@@ -1,6 +1,7 @@
 //! Paths under `~/.microkitchen` and small filesystem helpers.
 
 pub mod sandbox;
+pub mod secret;
 pub mod settings;
 
 use std::fs::{self, File, OpenOptions};

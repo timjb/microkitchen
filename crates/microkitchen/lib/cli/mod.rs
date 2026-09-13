@@ -1,11 +1,12 @@
 //! Command-line interface. One module per subcommand.
 
+mod broker;
 mod lifecycle;
 mod net;
 mod validate;
 
 use std::io::IsTerminal;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use anyhow::{Context as _, Result, bail};
@@ -13,10 +14,13 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use owo_colors::OwoColorize;
 use tracing_subscriber::EnvFilter;
 
+use crate::broker::protocol::{Answer, Mode};
+use crate::config::discover::discover;
 use crate::config::edit::RuleList;
 use crate::config::{Diagnostics, Severity};
 use crate::mise::Mise;
-use crate::state::{HOME_ENV, Home};
+use crate::sandbox::naming::sandbox_name;
+use crate::state::{HOME_ENV, Home, secret};
 
 //--------------------------------------------------------------------------------------------------
 // Types
@@ -194,6 +198,32 @@ pub struct Context {
 // Methods
 //--------------------------------------------------------------------------------------------------
 
+impl Cli {
+    /// `microkitchen broker run`.
+    pub fn is_broker_daemon(&self) -> bool {
+        matches!(self.command, Some(Command::Broker(BrokerCommand::Run)))
+    }
+}
+
+impl From<Verdict> for Answer {
+    fn from(verdict: Verdict) -> Self {
+        match verdict {
+            Verdict::Allow => Self::Allow,
+            Verdict::Deny => Self::Deny,
+            Verdict::Temp => Self::Temp,
+        }
+    }
+}
+
+impl From<BrokerMode> for Mode {
+    fn from(mode: BrokerMode) -> Self {
+        match mode {
+            BrokerMode::Open => Self::Open,
+            BrokerMode::Enforce => Self::Enforce,
+        }
+    }
+}
+
 impl Command {
     fn name(&self) -> &'static str {
         match self {
@@ -239,12 +269,7 @@ pub fn init_logging(verbose: u8, quiet: bool) {
 }
 
 pub async fn run(cli: Cli) -> Result<ExitCode> {
-    let cwd = match cli.dir {
-        Some(dir) => {
-            std::path::absolute(&dir).with_context(|| format!("resolving {}", dir.display()))?
-        }
-        None => std::env::current_dir().context("reading the current directory")?,
-    };
+    let cwd = resolve_cwd(cli.dir.as_deref())?;
     let ctx = Context {
         cwd,
         home: Home::resolve(cli.home)?,
@@ -271,7 +296,57 @@ pub async fn run(cli: Cli) -> Result<ExitCode> {
         Command::Net(NetCommand::Deny { rule, global }) => {
             net::set_rule(&ctx, RuleList::Deny, &rule, global)
         }
+        Command::Net(NetCommand::Pending) => net::pending(&ctx).await,
+        Command::Net(NetCommand::Decide { id, verdict }) => {
+            net::decide(&ctx, id, verdict.into()).await
+        }
+        Command::Net(NetCommand::Mode { mode }) => net::mode(&ctx, mode.into()).await,
+        Command::Net(NetCommand::Bindings) => net::bindings(&ctx).await,
+        Command::Net(NetCommand::Temp { host }) => net::temp(&ctx, &host).await,
+        Command::Broker(command) => broker::run(&ctx, command).await,
         other => bail!("`microkitchen {}` is not implemented yet", other.name()),
+    }
+}
+
+/// Export the project's proxy password for microsandbox, which reads it from
+/// the host environment whenever it starts a sandbox. Must run before the
+/// async runtime exists: changing the environment is only sound while the
+/// process is single-threaded.
+pub fn export_proxy_secret(cli: &Cli) -> Result<()> {
+    let may_start_sandbox = matches!(
+        cli.command,
+        None | Some(
+            Command::Up(_)
+                | Command::Start
+                | Command::Restart
+                | Command::Shell
+                | Command::Exec { .. }
+                | Command::Bootstrap
+        )
+    );
+    if !may_start_sandbox {
+        return Ok(());
+    }
+    let cwd = resolve_cwd(cli.dir.as_deref())?;
+    // Problems finding the project are reported by the command itself.
+    let Ok(discovery) = discover(&Mise::from_env(), &cwd) else {
+        return Ok(());
+    };
+    let home = Home::resolve(cli.home.clone())?;
+    let name = sandbox_name(&discovery.kitchen_file, &discovery.kitchen_dir);
+    let value = secret::load_or_create(&home, &name)?;
+    // SAFETY: main calls this before creating the tokio runtime; no other
+    // threads exist yet.
+    unsafe { std::env::set_var(secret::env_var(&name), value) };
+    Ok(())
+}
+
+fn resolve_cwd(dir: Option<&Path>) -> Result<PathBuf> {
+    match dir {
+        Some(dir) => {
+            std::path::absolute(dir).with_context(|| format!("resolving {}", dir.display()))
+        }
+        None => std::env::current_dir().context("reading the current directory"),
     }
 }
 

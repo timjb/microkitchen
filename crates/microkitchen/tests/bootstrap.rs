@@ -10,6 +10,7 @@ jq = "1.7.1"
 run = "echo ran > /root/bootstrap-marker"
 
 [_.microkitchen]
+cpus = 1
 memory = "1G"
 "#;
 
@@ -61,7 +62,7 @@ async fn failed_bootstrap_is_retried() {
     let k = TestKitchen::new(env!("CARGO_BIN_EXE_microkitchen"));
     k.write(
         "mise.toml",
-        "[tasks.bootstrap]\nrun = \"test -f /root/allow-bootstrap\"\n\n[_.microkitchen]\nmemory = \"1G\"\n",
+        "[tasks.bootstrap]\nrun = \"test -f /root/allow-bootstrap\"\n\n[_.microkitchen]\ncpus = 1\nmemory = \"1G\"\n",
     );
     k.track_sandbox();
     let failed = k.run("", &["up", "--no-shell"]);

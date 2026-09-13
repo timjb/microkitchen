@@ -2,7 +2,7 @@
 
 use test_utils::{TestKitchen, mk_test, stdout};
 
-const KITCHEN: &str = "[_.microkitchen]\nmemory = \"1G\"\n";
+const KITCHEN: &str = "[_.microkitchen]\ncpus = 1\nmemory = \"1G\"\n";
 
 #[mk_test]
 async fn kitchens_share_the_mise_cache() {

@@ -6,6 +6,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::OnceLock;
+use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
+
+use serde_json::Value;
 
 use tempfile::TempDir;
 
@@ -30,6 +34,7 @@ pub const ISOLATE_ENV: &str = "MK_TEST_ISOLATE_HOME";
 pub struct TestKitchen {
     root: TempDir,
     bin: PathBuf,
+    home: PathBuf,
     has_sandbox: Cell<bool>,
 }
 
@@ -40,14 +45,40 @@ pub struct TestKitchen {
 impl TestKitchen {
     /// `bin` is the microkitchen binary, `env!("CARGO_BIN_EXE_microkitchen")`.
     pub fn new(bin: impl Into<PathBuf>) -> Self {
-        let root = tempfile::Builder::new()
+        let root = Self::temp_root();
+        let home = root.path().join("home");
+        Self::build(root, bin.into(), home)
+    }
+
+    /// A second project sharing `home` (and so the broker) with another kitchen.
+    pub fn with_home(bin: impl Into<PathBuf>, home: PathBuf) -> Self {
+        Self::build(Self::temp_root(), bin.into(), home)
+    }
+
+    fn temp_root() -> TempDir {
+        tempfile::Builder::new()
             .prefix("mk-test-")
             .tempdir()
-            .expect("creating the test directory");
+            .expect("creating the test directory")
+    }
+
+    /// Approvals are queued for `net decide` instead of denied, since tests
+    /// have no desktop.
+    fn build(root: TempDir, bin: PathBuf, home: PathBuf) -> Self {
         fs::create_dir_all(root.path().join("project")).expect("creating the project directory");
+        fs::create_dir_all(&home).expect("creating the home directory");
+        let settings = home.join("config.toml");
+        if !settings.exists() {
+            fs::write(
+                &settings,
+                "[approval]\nheadless = \"queue\"\ntimeout_secs = 180\n",
+            )
+            .expect("writing test settings");
+        }
         Self {
             root,
-            bin: bin.into(),
+            bin,
+            home,
             has_sandbox: Cell::new(false),
         }
     }
@@ -57,7 +88,7 @@ impl TestKitchen {
     }
 
     pub fn home(&self) -> PathBuf {
-        self.root.path().join("home")
+        self.home.clone()
     }
 
     /// Write a file relative to the project, creating parent directories.
@@ -98,9 +129,7 @@ impl TestKitchen {
 
     /// Run a microkitchen command to completion.
     pub fn run(&self, cwd: &str, args: &[&str]) -> Output {
-        self.command(cwd, args)
-            .output()
-            .expect("running microkitchen")
+        timed(self.command(cwd, args))
     }
 
     /// Remove this kitchen's sandbox on drop, for tests that create it
@@ -119,7 +148,7 @@ impl TestKitchen {
         self.has_sandbox.set(true);
         let mut command = self.command("", ["up", "--no-shell"]);
         configure(&mut command);
-        let output = command.output().expect("running microkitchen up");
+        let output = timed(command);
         assert!(
             output.status.success(),
             "microkitchen up failed\nstdout:\n{}\nstderr:\n{}",
@@ -134,6 +163,59 @@ impl TestKitchen {
         let mut all = vec!["exec", "--"];
         all.extend_from_slice(args);
         self.run("", &all)
+    }
+
+    /// `microkitchen exec -- <args>` with owned arguments (not asserted).
+    pub fn exec_owned(&self, args: Vec<String>) -> Output {
+        let mut all = vec!["exec".to_owned(), "--".to_owned()];
+        all.extend(args);
+        timed(self.command("", all))
+    }
+
+    /// Run `exec` on another thread, for flows that wait on an approval.
+    pub fn spawn_exec(&self, args: Vec<String>) -> JoinHandle<Output> {
+        let mut all = vec!["exec".to_owned(), "--".to_owned()];
+        all.extend(args);
+        let command = self.command("", all);
+        std::thread::spawn(move || timed(command))
+    }
+
+    /// Pending approvals (`net pending --json`).
+    pub fn pending(&self) -> Vec<Value> {
+        let output = self.run("", &["net", "pending", "--json"]);
+        assert!(
+            output.status.success(),
+            "net pending failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice(&output.stdout).expect("pending approvals as JSON")
+    }
+
+    /// Wait up to two minutes for a pending approval matching `predicate`.
+    pub fn wait_for_pending(&self, predicate: impl Fn(&Value) -> bool) -> Value {
+        let deadline = Instant::now() + Duration::from_secs(120);
+        loop {
+            if let Some(found) = self.pending().into_iter().find(|p| predicate(p)) {
+                return found;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "no matching approval; pending: {:?}",
+                self.pending()
+            );
+            std::thread::sleep(Duration::from_millis(500));
+        }
+    }
+
+    /// Answer a pending approval (`allow`, `deny` or `temp`).
+    pub fn decide(&self, pending: &Value, answer: &str) {
+        let id = pending["id"].to_string();
+        let output = self.run("", &["net", "decide", &id, answer]);
+        assert!(
+            output.status.success(),
+            "net decide failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     /// Point mise at directories inside the fixture and trust the project.
@@ -157,7 +239,8 @@ impl TestKitchen {
 impl Drop for TestKitchen {
     fn drop(&mut self) {
         if self.has_sandbox.get() {
-            let _ = self.command("", ["down", "--purge", "-q"]).output();
+            timed(self.command("", ["down", "--purge", "-q"]));
+            timed(self.command("", ["broker", "stop", "-q"]));
         }
     }
 }
@@ -165,6 +248,35 @@ impl Drop for TestKitchen {
 //--------------------------------------------------------------------------------------------------
 // Functions
 //--------------------------------------------------------------------------------------------------
+
+/// Run `command` to completion, reporting how long it took (visible with `--nocapture`).
+fn timed(mut command: Command) -> Output {
+    let label: Vec<String> = command
+        .get_args()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect();
+    let started = Instant::now();
+    let output = command.output().expect("running microkitchen");
+    eprintln!(
+        "[mk-test] {:>6.1}s  microkitchen {}",
+        started.elapsed().as_secs_f64(),
+        label.join(" ")
+    );
+    output
+}
+
+/// The candidate names of a pending approval.
+pub fn names_of(pending: &Value) -> Vec<String> {
+    pending["names"]
+        .as_array()
+        .map(|names| {
+            names
+                .iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default()
+}
 
 /// Stdout of a finished command as a string.
 pub fn stdout(output: &Output) -> String {

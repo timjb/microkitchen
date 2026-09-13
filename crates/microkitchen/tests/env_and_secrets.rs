@@ -46,6 +46,7 @@ TOKEN = { required = true }
 OPT = { default = "" }
 
 [_.microkitchen]
+cpus = 1
 memory = "1G"
 
 [_.microkitchen.network]
