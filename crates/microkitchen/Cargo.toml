@@ -1,0 +1,43 @@
+[package]
+name = "microkitchen"
+description = "Launch microsandbox VMs from a mise.toml, with interactive egress control."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+autobins = false
+autotests = false
+
+[lib]
+name = "microkitchen"
+path = "lib/lib.rs"
+
+[[bin]]
+name = "microkitchen"
+path = "bin/main.rs"
+
+[[test]]
+name = "config_discovery"
+path = "tests/config_discovery.rs"
+
+[dependencies]
+anyhow = "1.0.104"
+clap = { version = "4.6.6", features = ["derive", "env"] }
+hex = "0.4.3"
+ipnet = "2.12.2"
+owo-colors = "4.4.0"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+sha2 = "0.11.0"
+tempfile = "3.27.0"
+thiserror = "2.0.20"
+toml = "1.1.6"
+toml_edit = "0.25.15"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+
+[dev-dependencies]
+serde_json = "1.0.151"
+tempfile = "3.27.0"
+test-macros.workspace = true
+test-utils.workspace = true

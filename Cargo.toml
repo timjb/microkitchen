@@ -1,0 +1,13 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+
+[workspace.dependencies]
+test-macros = { path = "crates/test-macros" }
+test-utils = { path = "crates/test-utils" }
