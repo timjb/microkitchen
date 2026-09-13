@@ -7,6 +7,7 @@
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -16,10 +17,12 @@ use subtle::ConstantTimeEq;
 use tokio::net::{TcpListener, UdpSocket};
 use tokio_util::sync::CancellationToken;
 
-use super::approval::{ApprovalQueue, CoalesceKey, Outcome, PromptInfo};
+use super::approval::{ApprovalQueue, CoalesceKey, OriginSlot, Outcome, PromptInfo};
+use super::attribution::{self, Origin};
 use super::audit::{Audit, AuditEvent};
 use super::bindings::BindingStore;
 use super::decision::{self, Admission, Decision, Session};
+use super::dialog::{self, Desktop, Surface};
 use super::mediator;
 use super::observer::{self, Recorder};
 use super::protocol::{
@@ -54,6 +57,8 @@ pub struct SandboxEntry {
     pub proxy_port: u16,
     secret: Vec<u8>,
     mode: Mutex<Mode>,
+    /// The approval rate limit tripped: deny everything until `net resume`.
+    limited: AtomicBool,
     bindings: Mutex<BindingStore>,
     session: Mutex<Session>,
     rules: RuleSource,
@@ -79,6 +84,9 @@ struct Persisted {
     mode: Mode,
     resolver_port: u16,
     proxy_port: u16,
+    /// A tripped rate limit survives a restart; only `net resume` lifts it.
+    #[serde(default)]
+    limited: bool,
 }
 
 //--------------------------------------------------------------------------------------------------
@@ -95,6 +103,10 @@ impl SandboxEntry {
 
     pub fn mode(&self) -> Mode {
         *self.mode.lock().unwrap()
+    }
+
+    pub fn limited(&self) -> bool {
+        self.limited.load(Ordering::SeqCst)
     }
 
     fn record_dns(&self, response: &[u8]) {
@@ -124,9 +136,19 @@ impl Broker {
             .ok()
             .and_then(|v| v.parse().ok())
             .map_or(TEMP_ALLOW, Duration::from_secs);
+        let surface: Option<Arc<dyn Surface>> = match dialog::detect(settings.approval.dialog) {
+            Some(backend) => {
+                tracing::info!(program = backend.program(), "approval dialogs enabled");
+                Some(Arc::new(Desktop::new(backend)))
+            }
+            None => {
+                tracing::info!(headless = ?settings.approval.headless, "no approval dialogs; using the headless fallback");
+                None
+            }
+        };
         Ok(Arc::new(Self {
             audit: Audit::open(&home.broker_dir().join("audit.log")),
-            approvals: ApprovalQueue::new(settings.approval.clone()),
+            approvals: ApprovalQueue::new(settings.approval.clone(), surface),
             port_range: settings.broker.port_range,
             upstreams: Arc::from(upstreams),
             sandboxes: Mutex::default(),
@@ -171,6 +193,7 @@ impl Broker {
             proxy_port,
             secret: secret.into_bytes(),
             mode: Mutex::new(mode),
+            limited: AtomicBool::new(false),
             bindings: Mutex::default(),
             session: Mutex::default(),
             cancel: CancellationToken::new(),
@@ -236,6 +259,18 @@ impl Broker {
         Ok(())
     }
 
+    /// Lift a tripped rate limit. True if the sandbox was limited.
+    pub fn resume(&self, name: &str) -> Result<bool> {
+        let entry = self
+            .get(name)
+            .with_context(|| format!("{name} is not registered"))?;
+        let was_limited = entry.limited.swap(false, Ordering::SeqCst);
+        self.approvals.reset(name);
+        self.persist();
+        tracing::info!(sandbox = name, was_limited, "resumed");
+        Ok(was_limited)
+    }
+
     /// Temporarily allow a name or address for one sandbox.
     pub fn grant(&self, name: &str, subject: &str) -> Result<()> {
         let entry = self
@@ -267,6 +302,7 @@ impl Broker {
                 resolver_port: e.resolver_port,
                 proxy_port: e.proxy_port,
                 bindings: e.bindings.lock().unwrap().len(),
+                limited: e.limited(),
             })
             .collect();
         out.sort_by(|a, b| a.name.cmp(&b.name));
@@ -325,8 +361,15 @@ impl Broker {
                 .await
             {
                 tracing::warn!(sandbox = %p.name, error = %format!("{error:#}"), "could not restore registration");
+                continue;
+            }
+            if p.limited
+                && let Some(entry) = self.get(&p.name)
+            {
+                entry.limited.store(true, Ordering::SeqCst);
             }
         }
+        self.persist();
     }
 
     /// Decide whether a flow may proceed, asking a human if nothing stored applies.
@@ -353,6 +396,10 @@ impl Broker {
             candidates,
             malformed: false,
         };
+        if entry.limited() {
+            self.log(entry, &admission, false, "rate-limited", false, None);
+            return false;
+        }
         let rules = entry.rules.current();
         let decision = {
             let session = entry.session.lock().unwrap();
@@ -361,11 +408,25 @@ impl Broker {
 
         match decision {
             Decision::Allow { reason, ambiguous } => {
-                self.log(entry, &admission, true, &reason.to_string(), ambiguous);
+                self.log(
+                    entry,
+                    &admission,
+                    true,
+                    &reason.to_string(),
+                    ambiguous,
+                    None,
+                );
                 true
             }
             Decision::Deny { reason, ambiguous } => {
-                self.log(entry, &admission, false, &reason.to_string(), ambiguous);
+                self.log(
+                    entry,
+                    &admission,
+                    false,
+                    &reason.to_string(),
+                    ambiguous,
+                    None,
+                );
                 false
             }
             Decision::Prompt(kind) => {
@@ -385,14 +446,31 @@ impl Broker {
                     subject,
                     port,
                 };
+                // Attribution runs alongside the prompt and never delays it;
+                // its answer is for the operator's eyes only.
+                let origin = OriginSlot::default();
+                if self.approvals.reaches_human() && !self.approvals.is_inflight(&key) {
+                    let (slot, sandbox) = (origin.clone(), entry.name.clone());
+                    tokio::spawn(async move {
+                        if let Some(found) =
+                            attribution::lookup(&sandbox, transport, address, port).await
+                        {
+                            slot.set(found);
+                        }
+                    });
+                }
                 let info = PromptInfo {
                     sandbox: entry.name.clone(),
                     transport,
                     address,
                     port,
                     names: admission.names(),
+                    origin: origin.clone(),
                 };
                 let outcome = self.approvals.ask(key, info, cancel).await;
+                if outcome == Outcome::RateLimited {
+                    self.trip_rate_limit(entry);
+                }
                 let allowed = self.apply(entry, &subjects, outcome);
                 let source = format!("prompt:{}", outcome_name(outcome));
                 self.log(
@@ -401,6 +479,7 @@ impl Broker {
                     allowed,
                     &source,
                     admission.candidates.len() > 1,
+                    origin.get().as_ref(),
                 );
                 allowed
             }
@@ -419,7 +498,21 @@ impl Broker {
             allowed: false,
             source: &format!("malformed:{detail}"),
             ambiguous: false,
+            origin: None,
         });
+    }
+
+    /// Switch a sandbox to deny-all and say so once.
+    fn trip_rate_limit(&self, entry: &SandboxEntry) {
+        if entry.limited.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        self.persist();
+        self.approvals.notify(&format!(
+            "{} asked for too many network approvals; all its network access is now denied. \
+             Run `microkitchen net resume` in its project to allow approvals again.",
+            entry.name
+        ));
     }
 
     /// Apply an operator's answer. Persisting is best effort: a failed write
@@ -454,7 +547,7 @@ impl Broker {
                 }
                 true
             }
-            Outcome::Dismissed | Outcome::Cancelled => false,
+            Outcome::Dismissed | Outcome::Cancelled | Outcome::RateLimited => false,
         }
     }
 
@@ -465,6 +558,7 @@ impl Broker {
         allowed: bool,
         source: &str,
         ambiguous: bool,
+        origin: Option<&Origin>,
     ) {
         let names = admission.names();
         tracing::info!(
@@ -474,6 +568,7 @@ impl Broker {
             names = ?names,
             allowed,
             source,
+            origin = origin.map(|o| o.to_string()),
             "verdict"
         );
         self.audit.record(&AuditEvent {
@@ -485,6 +580,7 @@ impl Broker {
             allowed,
             source,
             ambiguous,
+            origin,
         });
     }
 
@@ -508,6 +604,7 @@ impl Broker {
                 mode: e.mode(),
                 resolver_port: e.resolver_port,
                 proxy_port: e.proxy_port,
+                limited: e.limited(),
             })
             .collect();
         let result = serde_json::to_vec_pretty(&entries)
@@ -538,6 +635,7 @@ fn outcome_name(outcome: Outcome) -> &'static str {
         Outcome::Temp => "temp",
         Outcome::Dismissed => "dismissed",
         Outcome::Cancelled => "cancelled",
+        Outcome::RateLimited => "rate-limited",
     }
 }
 

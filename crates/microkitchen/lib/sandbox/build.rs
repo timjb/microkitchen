@@ -9,6 +9,7 @@ use microsandbox_network::policy::{
 };
 
 use super::plan::SandboxPlan;
+use crate::broker::attribution;
 use crate::config::hostpat::HostPattern;
 use crate::config::schema::{MAX_CPUS, MAX_MEMORY_MIB, NetworkPreset, Protocol, SecretConfig};
 
@@ -65,6 +66,8 @@ pub fn builder(plan: &SandboxPlan) -> SandboxBuilder {
         .shell("/bin/bash")
         .init(GUEST_INIT)
         .env("PATH", GUEST_PATH)
+        // The broker's process attribution helper (design §8).
+        .script(attribution::SCRIPT_NAME, attribution::SCRIPT)
         .volume(MISE_CACHE_GUEST_PATH, |mount| {
             mount.named_with(MISE_CACHE_VOLUME, |volume| volume.ensure_exists())
         });

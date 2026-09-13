@@ -89,6 +89,20 @@ pub(super) async fn temp(ctx: &Context, host: &str) -> Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
+/// `net resume`: leave deny-all after the approval rate limit tripped.
+pub(super) async fn resume(ctx: &Context) -> Result<ExitCode> {
+    let name = project_sandbox(ctx)?;
+    let was_limited = BrokerClient::new(&ctx.home).resume(&name).await?;
+    if !ctx.quiet {
+        if was_limited {
+            eprintln!("{name} may ask for network approvals again");
+        } else {
+            eprintln!("{name} was not rate limited");
+        }
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
 fn print_pending(approval: &PendingApproval) {
     let transport = format!("{:?}", approval.transport).to_lowercase();
     let names = if approval.unresolved {
@@ -96,8 +110,13 @@ fn print_pending(approval: &PendingApproval) {
     } else {
         approval.names.join(", ")
     };
+    let origin = approval
+        .origin
+        .as_ref()
+        .map(|o| format!("  {o}"))
+        .unwrap_or_default();
     println!(
-        "{:>4}  {}  {}:{} ({transport})  {names}  [{}s]",
+        "{:>4}  {}  {}:{} ({transport})  {names}{origin}  [{}s]",
         approval.id, approval.sandbox, approval.address, approval.port, approval.age_secs
     );
 }

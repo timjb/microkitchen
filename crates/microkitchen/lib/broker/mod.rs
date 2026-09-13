@@ -2,11 +2,13 @@
 //! sandbox (see `specs/egress-broker-design.md`).
 
 pub mod approval;
+pub mod attribution;
 pub mod audit;
 pub mod bindings;
 pub mod client;
 pub mod daemon;
 pub mod decision;
+pub mod dialog;
 pub mod mediator;
 pub mod observer;
 pub mod protocol;

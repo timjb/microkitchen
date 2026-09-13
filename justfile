@@ -7,6 +7,10 @@ build:
 test:
     cargo test --workspace
 
+# The guest attribution script (scripts/guest/whodial.sh) against fake /proc trees.
+test-scripts:
+    cargo test -p microkitchen --lib broker::attribution
+
 # Tests that boot microVMs (need KVM and msb).
 test-integration:
     MK_TEST_ISOLATE_HOME=1 cargo nextest run --workspace --run-ignored=only --test-threads 2

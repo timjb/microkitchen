@@ -71,7 +71,7 @@ impl TestKitchen {
         if !settings.exists() {
             fs::write(
                 &settings,
-                "[approval]\nheadless = \"queue\"\ntimeout_secs = 180\n",
+                "[approval]\ndialog = \"none\"\nheadless = \"queue\"\ntimeout_secs = 180\n",
             )
             .expect("writing test settings");
         }

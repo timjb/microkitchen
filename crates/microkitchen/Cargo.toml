@@ -68,6 +68,18 @@ path = "tests/resolver_bypass.rs"
 name = "two_sandboxes"
 path = "tests/two_sandboxes.rs"
 
+[[test]]
+name = "process_attribution"
+path = "tests/process_attribution.rs"
+
+[[test]]
+name = "rate_limit"
+path = "tests/rate_limit.rs"
+
+[[test]]
+name = "broker_restart"
+path = "tests/broker_restart.rs"
+
 [dependencies]
 anyhow = "1.0.104"
 clap = { version = "4.6.6", features = ["derive", "env"] }

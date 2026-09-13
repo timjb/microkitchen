@@ -4,8 +4,11 @@
 //! mise_version = "2026.9.6"      # mise installed in guests (default: latest)
 //!
 //! [approval]
+//! dialog = "auto"                # "auto", "zenity", "kdialog", "osascript" or "none"
 //! headless = "deny"              # no dialog available: "deny" or "queue" for `net decide`
 //! timeout_secs = 60              # unanswered approvals deny the flow
+//! max_prompts = 20               # more prompts than this within window_secs
+//! window_secs = 600              #   switch a sandbox to deny-all (`net resume`)
 //!
 //! [broker]
 //! port_range = [40000, 49999]    # per-sandbox resolver and proxy ports
@@ -37,10 +40,28 @@ pub struct Settings {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ApprovalSettings {
+    /// Which desktop dialog shows approvals.
+    pub dialog: DialogSetting,
     /// What happens when no dialog can be shown. Explicit, never inferred.
     pub headless: HeadlessFallback,
     /// Seconds before an unanswered approval denies the flow (not remembered).
     pub timeout_secs: u64,
+    /// More prompts than this within `window_secs` switch a sandbox to deny-all.
+    pub max_prompts: u32,
+    pub window_secs: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DialogSetting {
+    /// osascript on macOS; zenity or kdialog when a display is available.
+    #[default]
+    Auto,
+    Zenity,
+    Kdialog,
+    Osascript,
+    /// Never show dialogs; use the headless fallback.
+    None,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
@@ -87,6 +108,10 @@ impl Settings {
                 bail!("mise_version must look like \"2026.9.6\", got {version:?}");
             }
         }
+        let approval = &settings.approval;
+        if approval.max_prompts == 0 || approval.window_secs == 0 || approval.timeout_secs == 0 {
+            bail!("approval.max_prompts, window_secs and timeout_secs must be at least 1");
+        }
         let (low, high) = settings.broker.port_range;
         if low < 1024 || low > high {
             bail!("broker.port_range must be [low, high] with 1024 <= low <= high");
@@ -99,6 +124,10 @@ impl ApprovalSettings {
     pub fn timeout(&self) -> Duration {
         Duration::from_secs(self.timeout_secs)
     }
+
+    pub fn window(&self) -> Duration {
+        Duration::from_secs(self.window_secs)
+    }
 }
 
 //--------------------------------------------------------------------------------------------------
@@ -108,8 +137,11 @@ impl ApprovalSettings {
 impl Default for ApprovalSettings {
     fn default() -> Self {
         Self {
+            dialog: DialogSetting::Auto,
             headless: HeadlessFallback::Deny,
             timeout_secs: 60,
+            max_prompts: 20,
+            window_secs: 600,
         }
     }
 }
@@ -160,6 +192,23 @@ mod tests {
             Settings::default().approval.headless,
             HeadlessFallback::Deny
         );
+    }
+
+    #[test]
+    fn dialogs_and_rate_limit() {
+        let s =
+            Settings::parse("[approval]\ndialog = \"none\"\nmax_prompts = 3\nwindow_secs = 30\n")
+                .unwrap();
+        assert_eq!(s.approval.dialog, DialogSetting::None);
+        assert_eq!(s.approval.max_prompts, 3);
+        assert_eq!(s.approval.window(), Duration::from_secs(30));
+        let defaults = Settings::default().approval;
+        assert_eq!(
+            (defaults.dialog, defaults.max_prompts, defaults.window_secs),
+            (DialogSetting::Auto, 20, 600)
+        );
+        assert!(Settings::parse("[approval]\ndialog = \"gtk\"\n").is_err());
+        assert!(Settings::parse("[approval]\nmax_prompts = 0\n").is_err());
     }
 
     #[test]

@@ -6,6 +6,8 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use super::attribution::Origin;
+
 //--------------------------------------------------------------------------------------------------
 // Types
 //--------------------------------------------------------------------------------------------------
@@ -63,6 +65,10 @@ pub enum Request {
         name: String,
         subject: String,
     },
+    /// Leave deny-all after the approval rate limit tripped.
+    Resume {
+        name: String,
+    },
     List,
     Pending,
     Decide {
@@ -99,6 +105,9 @@ pub struct SandboxInfo {
     pub resolver_port: u16,
     pub proxy_port: u16,
     pub bindings: usize,
+    /// The approval rate limit tripped: every flow is denied until `net resume`.
+    #[serde(default)]
+    pub limited: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -113,6 +122,10 @@ pub struct PendingApproval {
     /// The sandbox never resolved this address.
     pub unresolved: bool,
     pub age_secs: u64,
+    /// The guest process that opened the flow, when attribution found it.
+    /// Display only: supplied by the guest, never used to decide.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<Origin>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

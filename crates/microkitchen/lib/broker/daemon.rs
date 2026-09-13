@@ -128,6 +128,7 @@ async fn dispatch(
         Request::Retire { name } => Response::success(broker.retire(&name)),
         Request::SetMode { name, mode } => result(broker.set_mode(&name, mode)),
         Request::Grant { name, subject } => result(broker.grant(&name, &subject)),
+        Request::Resume { name } => result(broker.resume(&name)),
         Request::List => Response::success(broker.list()),
         Request::Pending => Response::success(broker.pending()),
         Request::Decide { id, answer } => {

@@ -9,6 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 
+use super::attribution::Origin;
 use super::protocol::Transport;
 
 //--------------------------------------------------------------------------------------------------
@@ -31,6 +32,10 @@ pub struct AuditEvent<'a> {
     pub source: &'a str,
     /// Several candidate names were bound to the address.
     pub ambiguous: bool,
+    /// The guest process behind a prompted flow. Display only: supplied by
+    /// the guest, never used to decide.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub origin: Option<&'a Origin>,
 }
 
 #[derive(Serialize)]
@@ -93,6 +98,10 @@ mod tests {
         let path = dir.path().join("broker/audit.log");
         let audit = Audit::open(&path);
         let names = vec!["example.com".to_string()];
+        let origin = Origin {
+            pid: 412,
+            name: "ntpd".into(),
+        };
         for allowed in [true, false] {
             audit.record(&AuditEvent {
                 sandbox: "mk-a",
@@ -103,6 +112,7 @@ mod tests {
                 allowed,
                 source: "allow-rule:example.com",
                 ambiguous: false,
+                origin: (!allowed).then_some(&origin),
             });
         }
         let text = fs::read_to_string(&path).unwrap();
@@ -114,5 +124,7 @@ mod tests {
         assert_eq!(lines[0]["transport"], "udp");
         assert_eq!(lines[1]["allowed"], false);
         assert!(lines[0]["ts"].as_u64().unwrap() > 0);
+        assert!(lines[0].get("origin").is_none());
+        assert_eq!(lines[1]["origin"]["name"], "ntpd");
     }
 }

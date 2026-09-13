@@ -64,7 +64,12 @@ impl BrokerClient {
     }
 
     pub async fn is_running(&self) -> bool {
-        self.request::<u32>(&Request::Ping).await.is_ok()
+        self.pid().await.is_ok()
+    }
+
+    /// The broker daemon's process id.
+    pub async fn pid(&self) -> Result<u32> {
+        self.request(&Request::Ping).await
     }
 
     pub fn log_file(&self) -> PathBuf {
@@ -108,6 +113,14 @@ impl BrokerClient {
         self.request(&Request::Grant {
             name: name.to_owned(),
             subject: subject.to_owned(),
+        })
+        .await
+    }
+
+    /// Lift a tripped approval rate limit. True if the sandbox was limited.
+    pub async fn resume(&self, name: &str) -> Result<bool> {
+        self.request(&Request::Resume {
+            name: name.to_owned(),
         })
         .await
     }

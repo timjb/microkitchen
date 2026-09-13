@@ -37,14 +37,16 @@ pub(super) async fn run(ctx: &Context, command: BrokerCommand) -> Result<ExitCod
         }
         BrokerCommand::Status => {
             let client = BrokerClient::new(&ctx.home);
-            let running = client.is_running().await;
+            let pid = client.pid().await.ok();
+            let running = pid.is_some();
             let sandboxes = if running {
                 client.list().await?
             } else {
                 Vec::new()
             };
             if ctx.json {
-                let status = serde_json::json!({ "running": running, "sandboxes": sandboxes });
+                let status =
+                    serde_json::json!({ "running": running, "pid": pid, "sandboxes": sandboxes });
                 println!("{}", serde_json::to_string_pretty(&status)?);
             } else if !running {
                 println!("the egress broker is not running");
@@ -54,8 +56,13 @@ pub(super) async fn run(ctx: &Context, command: BrokerCommand) -> Result<ExitCod
                     client.log_file().display()
                 );
                 for s in &sandboxes {
+                    let limited = if s.limited {
+                        "  DENY-ALL: approval rate limit (`microkitchen net resume`)"
+                    } else {
+                        ""
+                    };
                     println!(
-                        "  {:<40} {:<8} dns 127.0.0.1:{:<6} proxy 127.0.0.1:{:<6} {} bindings",
+                        "  {:<40} {:<8} dns 127.0.0.1:{:<6} proxy 127.0.0.1:{:<6} {} bindings{limited}",
                         s.name,
                         format!("{:?}", s.mode).to_lowercase(),
                         s.resolver_port,

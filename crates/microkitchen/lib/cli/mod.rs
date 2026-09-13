@@ -303,6 +303,7 @@ pub async fn run(cli: Cli) -> Result<ExitCode> {
         Command::Net(NetCommand::Mode { mode }) => net::mode(&ctx, mode.into()).await,
         Command::Net(NetCommand::Bindings) => net::bindings(&ctx).await,
         Command::Net(NetCommand::Temp { host }) => net::temp(&ctx, &host).await,
+        Command::Net(NetCommand::Resume) => net::resume(&ctx).await,
         Command::Broker(command) => broker::run(&ctx, command).await,
         other => bail!("`microkitchen {}` is not implemented yet", other.name()),
     }

@@ -395,8 +395,11 @@ The whole script runs under `timeout 1` so the deadline is enforced in the
 guest as well as by the broker. The broker invokes it via the SDK
 (`handle.connect().exec("mk-whodial", args)`) with a 1 s host-side deadline and
 omits the origin line on any failure, timeout, or non-zero exit. It never
-blocks the prompt. Output is parsed strictly as JSON with the two fields above;
-anything else is treated as "not found".
+blocks the prompt: the request is queued at once and the origin filled in when
+the lookup returns; a dialog waits at most the same second for it. Output is
+parsed strictly as JSON with the two fields above; anything else is treated as
+"not found". Sandboxes created before milestone 5 have no helper and simply
+show no origin.
 
 ### 7.5 Decision engine and rule store (design §9)
 
@@ -449,18 +452,25 @@ Wildcard scope ("this name and its subdomains") and global scope are available
 from the CLI (`microkitchen net allow '*.example.com' [--global]`) rather than
 as extra dialog buttons, to keep the dialog to the three specified choices.
 
-Backends: Linux `zenity --question --switch --extra-button Deny
---extra-button "Allow 5 min" --extra-button Allow --timeout 60` (label on
-stdout; empty = dismissed; exit 5 = timeout), or `kdialog`; macOS
-`osascript … display dialog … buttons {…} giving up after 60`. `headless`
-backend: the request is exposed via the admin socket (`microkitchen net
-pending`, `net decide <id> allow|deny|temp`). The fallback when no dialog can be
-shown is `approval.headless = "deny" | "queue"` in `~/.microkitchen/config.toml`,
-default `deny` (explicit, never inferred).
+Backends, chosen by `approval.dialog = "auto" | "zenity" | "kdialog" |
+"osascript" | "none"` (`auto`: osascript on macOS, otherwise zenity or kdialog
+when `DISPLAY`/`WAYLAND_DISPLAY` is set): Linux `zenity --question --switch
+--extra-button Deny --extra-button "Allow 5 min" --extra-button Allow --timeout
+60` (label on stdout; empty = dismissed; exit 5 = timeout), or `kdialog --menu`
+(a menu rather than `--yesnocancel`, so closing the window means nothing; no
+timeout of its own, the queue closes it at the deadline); macOS `osascript …
+display dialog … buttons {…} giving up after 60`. Every request is also exposed
+via the admin socket (`microkitchen net pending`, `net decide <id>
+allow|deny|temp`), so the CLI can answer while a dialog is up. The fallback when
+no dialog can be shown is `approval.headless = "deny" | "queue"` in
+`~/.microkitchen/config.toml`, default `deny` (explicit, never inferred).
 
 **Rate limit**: more than `approval.max_prompts` (default 20) prompts within
-`approval.window` (default 10 min) for one sandbox switches it to deny-all,
-notifies once (dialog or log), and requires `microkitchen net resume`.
+`approval.window_secs` (default 600) for one sandbox switches it to deny-all
+(persisted, so a broker restart does not lift it), notifies once
+(`notify-send`/`osascript` notification and the log), and requires `microkitchen
+net resume`. Only prompts that reach a human count: with the default headless
+`deny` nobody is being flooded.
 
 Audit log (`~/.microkitchen/broker/audit.log`, JSON lines): every verdict with
 sandbox, destination, candidate names, source of the decision, ambiguity
@@ -558,11 +568,12 @@ sandbox, registration and files on drop.
 - config: size/pattern parsing, schema and validation errors, `[_.microkitchen]`
   vs legacy handling, `toml_edit` round-trips preserving comments, remodel
   classification, env merge (pass-through omission, empty = absent)
-- `whodial.sh`: run by `just test-scripts` against fixture `/proc` trees under
-  `scripts/guest/tests/` with `PROC_ROOT` overridden (hex address parsing,
-  IPv6 word swapping, multiple netns, inode → pid, `LISTEN` excluded, UDP
-  unconnected → not found, malformed rows ignored); also executed from a Rust
-  unit test via `sh` so `cargo test` covers it
+- `whodial.sh`: Rust unit tests in `broker::attribution` build fake `/proc`
+  trees and run the script through `sh` with `PROC_ROOT` overridden (hex
+  address parsing, IPv6 word swapping, IPv4-mapped sockets, multiple netns,
+  inode → pid within the namespace, `LISTEN` excluded, UDP unconnected → not
+  found, malformed rows and arguments, name sanitizing), so `cargo test`
+  covers it; `just test-scripts` runs just those
 
 **Integration** (`crates/microkitchen/tests/`):
 
