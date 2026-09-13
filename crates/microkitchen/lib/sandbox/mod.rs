@@ -1,6 +1,9 @@
-//! Sandbox identity. Construction and lifecycle arrive with milestone 2.
+//! Sandbox identity, construction and lifecycle.
 
+pub mod build;
+pub mod lifecycle;
 pub mod naming;
+pub mod plan;
 
 /// Labels put on every sandbox microkitchen creates.
 pub mod labels {

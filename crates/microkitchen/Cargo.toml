@@ -20,17 +20,35 @@ path = "bin/main.rs"
 name = "config_discovery"
 path = "tests/config_discovery.rs"
 
+[[test]]
+name = "docker_in_sandbox"
+path = "tests/docker_in_sandbox.rs"
+
+[[test]]
+name = "env_and_secrets"
+path = "tests/env_and_secrets.rs"
+
+[[test]]
+name = "labels"
+path = "tests/labels.rs"
+
+[[test]]
+name = "ports"
+path = "tests/ports.rs"
+
 [dependencies]
 anyhow = "1.0.104"
 clap = { version = "4.6.6", features = ["derive", "env"] }
 hex = "0.4.3"
 ipnet = "2.12.2"
+microsandbox = "=0.6.18"
 owo-colors = "4.4.0"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 sha2 = "0.11.0"
 tempfile = "3.27.0"
 thiserror = "2.0.20"
+tokio = { version = "1.53.1", features = ["full"] }
 toml = "1.1.6"
 toml_edit = "0.25.15"
 tracing = "0.1.44"
@@ -41,3 +59,4 @@ serde_json = "1.0.151"
 tempfile = "3.27.0"
 test-macros.workspace = true
 test-utils.workspace = true
+tokio = { version = "1.53.1", features = ["full"] }

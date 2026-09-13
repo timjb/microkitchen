@@ -1,5 +1,6 @@
 //! Command-line interface. One module per subcommand.
 
+mod lifecycle;
 mod net;
 mod validate;
 
@@ -237,7 +238,7 @@ pub fn init_logging(verbose: u8, quiet: bool) {
         .try_init();
 }
 
-pub fn run(cli: Cli) -> Result<ExitCode> {
+pub async fn run(cli: Cli) -> Result<ExitCode> {
     let cwd = match cli.dir {
         Some(dir) => {
             std::path::absolute(&dir).with_context(|| format!("resolving {}", dir.display()))?
@@ -253,6 +254,15 @@ pub fn run(cli: Cli) -> Result<ExitCode> {
     };
 
     match cli.command.unwrap_or(Command::Up(UpArgs::default())) {
+        Command::Up(args) => lifecycle::up(&ctx, &args).await,
+        Command::Shell => lifecycle::shell(&ctx).await,
+        Command::Exec { command } => lifecycle::exec(&ctx, &command).await,
+        Command::Start => lifecycle::start(&ctx).await,
+        Command::Stop => lifecycle::stop(&ctx).await,
+        Command::Restart => lifecycle::restart(&ctx).await,
+        Command::Down { purge } => lifecycle::down(&ctx, purge).await,
+        Command::Status => lifecycle::status(&ctx).await,
+        Command::List => lifecycle::list(&ctx).await,
         Command::Validate => validate::run(&ctx),
         Command::Net(NetCommand::Allow { rule, global }) => {
             net::set_rule(&ctx, RuleList::Allow, &rule, global)

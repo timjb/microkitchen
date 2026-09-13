@@ -1,5 +1,6 @@
 //! Shared fixtures for microkitchen integration tests.
 
+use std::cell::Cell;
 use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -14,7 +15,7 @@ pub use test_macros::mk_test;
 // Constants
 //--------------------------------------------------------------------------------------------------
 
-/// When set, VM tests run against temporary `MSB_HOME` and `MICROKITCHEN_HOME`.
+/// When set, VM tests use their own microsandbox home instead of the user's.
 pub const ISOLATE_ENV: &str = "MK_TEST_ISOLATE_HOME";
 
 //--------------------------------------------------------------------------------------------------
@@ -24,10 +25,12 @@ pub const ISOLATE_ENV: &str = "MK_TEST_ISOLATE_HOME";
 /// A temporary project directory with mise isolated from the user's config.
 ///
 /// Layout: `<root>/project` (the kitchen), `<root>/home` (`MICROKITCHEN_HOME`),
-/// `<root>/mise/*` (mise's config, data, state and cache dirs).
+/// `<root>/mise/*` (mise's config, data, state and cache dirs). A sandbox
+/// created through [`TestKitchen::up`] is removed on drop.
 pub struct TestKitchen {
     root: TempDir,
     bin: PathBuf,
+    has_sandbox: Cell<bool>,
 }
 
 //--------------------------------------------------------------------------------------------------
@@ -45,6 +48,7 @@ impl TestKitchen {
         Self {
             root,
             bin: bin.into(),
+            has_sandbox: Cell::new(false),
         }
     }
 
@@ -99,6 +103,33 @@ impl TestKitchen {
             .expect("running microkitchen")
     }
 
+    /// `microkitchen up --no-shell`, asserting success.
+    pub fn up(&self) -> Output {
+        self.up_with(|_| {})
+    }
+
+    /// Like [`TestKitchen::up`], with extra setup of the command (e.g. host env vars).
+    pub fn up_with(&self, configure: impl FnOnce(&mut Command)) -> Output {
+        self.has_sandbox.set(true);
+        let mut command = self.command("", ["up", "--no-shell"]);
+        configure(&mut command);
+        let output = command.output().expect("running microkitchen up");
+        assert!(
+            output.status.success(),
+            "microkitchen up failed\nstdout:\n{}\nstderr:\n{}",
+            stdout(&output),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        output
+    }
+
+    /// `microkitchen exec -- <args>` (not asserted).
+    pub fn exec(&self, args: &[&str]) -> Output {
+        let mut all = vec!["exec", "--"];
+        all.extend_from_slice(args);
+        self.run("", &all)
+    }
+
     /// Point mise at directories inside the fixture and trust the project.
     pub fn isolate_mise(&self, command: &mut Command) {
         let mise = self.root.path().join("mise");
@@ -114,32 +145,74 @@ impl TestKitchen {
 }
 
 //--------------------------------------------------------------------------------------------------
+// Trait Implementations
+//--------------------------------------------------------------------------------------------------
+
+impl Drop for TestKitchen {
+    fn drop(&mut self) {
+        if self.has_sandbox.get() {
+            let _ = self.command("", ["down", "--purge", "-q"]).output();
+        }
+    }
+}
+
+//--------------------------------------------------------------------------------------------------
 // Functions
 //--------------------------------------------------------------------------------------------------
 
-/// Under `MK_TEST_ISOLATE_HOME`, point `MSB_HOME` and `MICROKITCHEN_HOME` at a
-/// temporary directory shared by the test binary, reusing the installed `msb`.
+/// Stdout of a finished command as a string.
+pub fn stdout(output: &Output) -> String {
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
+/// Under `MK_TEST_ISOLATE_HOME`, point `MSB_HOME` at a test-only directory:
+/// `$MK_TEST_MSB_HOME`, else `$HOME/.cache/microkitchen-test-msb`.
+///
+/// The directory persists across runs so the base image is pulled once, and
+/// lives on a real disk (images and flat root disks do not fit a tmpfs). The
+/// installed `msb` and libkrunfw are reused through `MSB_PATH` and
+/// `MSB_LIBKRUNFW_PATH`, which the isolated home does not contain.
 pub fn init_isolated_home() {
-    static HOME: OnceLock<Option<TempDir>> = OnceLock::new();
-    HOME.get_or_init(|| {
-        std::env::var_os(ISOLATE_ENV)?;
-        let dir = tempfile::Builder::new()
-            .prefix("mk-home-")
-            .tempdir()
-            .expect("creating the isolated home");
-        let msb = find_on_path("msb");
+    static DONE: OnceLock<()> = OnceLock::new();
+    DONE.get_or_init(|| {
+        if std::env::var_os(ISOLATE_ENV).is_none() {
+            return;
+        }
+        let env = |name: &str| {
+            std::env::var_os(name)
+                .filter(|v| !v.is_empty())
+                .map(PathBuf::from)
+        };
+        let original = env("MSB_HOME").or_else(|| env("HOME").map(|h| h.join(".microsandbox")));
+        let msb = env("MSB_PATH").or_else(|| find_on_path("msb")).or_else(|| {
+            original
+                .as_ref()
+                .map(|o| o.join("bin/msb"))
+                .filter(|p| p.exists())
+        });
+        let libkrunfw = env("MSB_LIBKRUNFW_PATH").or_else(|| {
+            original
+                .as_ref()
+                .map(|o| o.join("lib/libkrunfw.so"))
+                .filter(|p| p.exists())
+        });
+
+        let home = env("MK_TEST_MSB_HOME")
+            .or_else(|| env("HOME").map(|h| h.join(".cache/microkitchen-test-msb")))
+            .expect("set MK_TEST_MSB_HOME or HOME");
+        fs::create_dir_all(&home).expect("creating the isolated microsandbox home");
+
         // SAFETY: runs once, at the start of the first test, before the test
         // spawns threads that read the environment.
         unsafe {
-            std::env::set_var("MSB_HOME", dir.path().join("msb"));
-            std::env::set_var("MICROKITCHEN_HOME", dir.path().join("microkitchen"));
-            if std::env::var_os("MSB_PATH").is_none()
-                && let Some(msb) = msb
-            {
+            std::env::set_var("MSB_HOME", &home);
+            if let Some(msb) = msb {
                 std::env::set_var("MSB_PATH", msb);
             }
+            if let Some(libkrunfw) = libkrunfw {
+                std::env::set_var("MSB_LIBKRUNFW_PATH", libkrunfw);
+            }
         }
-        Some(dir)
     });
 }
 

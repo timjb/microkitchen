@@ -1,5 +1,7 @@
 //! Paths under `~/.microkitchen` and small filesystem helpers.
 
+pub mod sandbox;
+
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};

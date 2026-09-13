@@ -11,6 +11,10 @@ test:
 test-integration:
     MK_TEST_ISOLATE_HOME=1 cargo nextest run --workspace --run-ignored=only --test-threads 2
 
+# The VM tests without cargo-nextest, one at a time, against the user's microsandbox home.
+test-vm:
+    cargo test --workspace -- --ignored --test-threads 1
+
 lint:
     cargo fmt --all --check
     cargo clippy --workspace --all-targets -- -D warnings

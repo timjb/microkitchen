@@ -97,7 +97,6 @@ crates/microkitchen/             # CLI + broker (one binary: `microkitchen`)
   tests/                         # integration tests (§10)
 crates/test-macros/              # #[mk_test]
 crates/test-utils/               # isolated home, CLI runner, fixtures, broker test client
-scripts/guest/init.sh            # dockerd start script baked into the sandbox
 scripts/guest/whodial.sh         # process attribution helper baked into the sandbox
 scripts/guest/tests/             # fixture /proc trees + shell test runner for whodial.sh
 justfile                         # build, test, test-integration, test-scripts
@@ -249,8 +248,8 @@ optional ones fall back to `default`) and `[_.microkitchen]`, but strips
 | DNS | `.network(\|n\| n.dns(\|d\| d.nameservers(["127.0.0.1:<Rn>"])))` | Rn from `register` |
 | Proxy | `.proxy(\|p\| p.socks5("127.0.0.1:<Pn>").credentials(<sandbox name>, SecretSource::env("MK_PROXY_SECRET_<hash>")))` | password read by microsandbox from the host env at every sandbox start; microkitchen sets that variable in its own process before `create`/`start` |
 | Env/secrets | §4 | |
-| Init | `.script("mk-init", scripts/guest/init.sh)` + `.entrypoint(["mk-init"])` | `start-docker.sh`, wait for `docker info` (60 s), `exec sleep infinity`. The non-systemd ubuntu-dind variant requires `start-docker.sh` explicitly |
-| Guest helper | `.script("mk-whodial", include_str!("scripts/guest/whodial.sh"))` | lands in `/.msb/scripts/mk-whodial` (on `PATH`), same mechanism as `mk-init` |
+| Init | `.init("auto")` | Resolves to the image's `/sbin/init` (systemd); the image's enabled `docker.service` starts dockerd on every boot, and `up`/`start` wait for `docker info` (90 s). Verified in milestone 2: an `entrypoint`/startup command runs only at *create* (the SDK's launch intent is not persisted), processes backgrounded from `exec` keep the exec from returning, and handing PID 1 to `supervisord` breaks exec |
+| Guest helper | `.script("mk-whodial", include_str!("scripts/guest/whodial.sh"))` | lands in `/.msb/scripts/mk-whodial` (on `PATH`) |
 | Guest config | `.patch(\|p\| p.text("/root/kitchen/mise.toml", rendered, None, true))` | `mise bootstrap` runs with `-C /root/kitchen` |
 | Mode | `.create_detached()` | |
 
@@ -617,10 +616,9 @@ sandbox, registration and files on drop.
 
 ## 12. Risks and open points
 
-- **dockerd in the ubuntu-dind microVM**: expected to work (flat root disk +
-  `start-docker.sh`), verified in milestone 2 before anything builds on it.
-  Fallback: the image's daemon flags (`--iptables=false`, `vfs`) at a
-  performance cost.
+- **dockerd in the ubuntu-dind microVM**: verified in milestone 2 (flat ext4
+  root, systemd via `.init("auto")`, overlayfs storage driver, cgroup v2;
+  `docker run hello-world` works, also after stop/start).
 - **Proxy secret at start**: microsandbox reads the password from the host
   environment at every start, so `msb start <name>` outside microkitchen will
   fail auth. Documented; `microkitchen start` is the supported path.
