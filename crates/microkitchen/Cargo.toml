@@ -80,6 +80,10 @@ path = "tests/rate_limit.rs"
 name = "broker_restart"
 path = "tests/broker_restart.rs"
 
+[[test]]
+name = "dialog_backend"
+path = "tests/dialog_backend.rs"
+
 [dependencies]
 anyhow = "1.0.104"
 clap = { version = "4.6.6", features = ["derive", "env"] }
