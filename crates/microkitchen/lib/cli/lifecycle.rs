@@ -13,12 +13,14 @@ use serde::Serialize;
 use super::{Context, UpArgs, print_diagnostics};
 use crate::config::Project;
 use crate::config::discover::{Discovery, discover};
+use crate::sandbox::bootstrap;
 use crate::sandbox::build::IMAGE;
 use crate::sandbox::labels;
 use crate::sandbox::lifecycle::{self, is_active, label, status_name};
 use crate::sandbox::naming::sandbox_name;
 use crate::sandbox::plan::SandboxPlan;
 use crate::state::sandbox::SandboxState;
+use crate::state::settings::Settings;
 
 //--------------------------------------------------------------------------------------------------
 // Constants
@@ -84,6 +86,11 @@ pub(super) async fn up(ctx: &Context, args: &UpArgs) -> Result<ExitCode> {
 
     say(ctx, "waiting for Docker");
     lifecycle::wait_for_docker(&sandbox, DOCKER_READY_TIMEOUT).await?;
+
+    let bootstrapped = SandboxState::load(&ctx.home, &plan.name)?.is_some_and(|s| s.bootstrapped);
+    if !bootstrapped {
+        run_bootstrap(ctx, &sandbox, &plan.name).await?;
+    }
 
     if args.no_shell {
         say(ctx, format!("{} is ready", plan.name));
@@ -225,6 +232,35 @@ pub(super) async fn list(ctx: &Context) -> Result<ExitCode> {
         }
     }
     Ok(ExitCode::SUCCESS)
+}
+
+pub(super) async fn bootstrap(ctx: &Context) -> Result<ExitCode> {
+    let handle = require(ctx).await?;
+    let sandbox = lifecycle::start(&handle).await?;
+    lifecycle::wait_for_docker(&sandbox, DOCKER_READY_TIMEOUT).await?;
+    run_bootstrap(ctx, &sandbox, handle.name()).await?;
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Run `mise bootstrap` and record the result in `state.json` and the label.
+async fn run_bootstrap(ctx: &Context, sandbox: &Sandbox, name: &str) -> Result<()> {
+    let settings = Settings::load(&ctx.home)?;
+    let log = ctx.home.logs_dir().join(name).join("bootstrap.log");
+    say(
+        ctx,
+        format!("running mise bootstrap (log: {})", log.display()),
+    );
+
+    let script = bootstrap::script(settings.mise_version.as_deref());
+    let result = bootstrap::run(sandbox, &script, &log, !ctx.quiet).await;
+    let succeeded = result.is_ok();
+
+    bootstrap::mark(sandbox, succeeded).await;
+    if let Some(mut state) = SandboxState::load(&ctx.home, name)? {
+        state.bootstrapped = succeeded;
+        state.save(&ctx.home)?;
+    }
+    result
 }
 
 async fn create(ctx: &Context, plan: &SandboxPlan) -> Result<Sandbox> {

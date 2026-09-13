@@ -1,5 +1,6 @@
 //! Sandbox identity, construction and lifecycle.
 
+pub mod bootstrap;
 pub mod build;
 pub mod lifecycle;
 pub mod naming;

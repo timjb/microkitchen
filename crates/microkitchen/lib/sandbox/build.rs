@@ -29,6 +29,14 @@ pub const MISE_CACHE_GUEST_PATH: &str = "/root/.cache/mise";
 /// Directory holding the guest copy of the kitchen file.
 pub const GUEST_KITCHEN_DIR: &str = "/root/kitchen";
 
+/// mise's global config in the guest; a symlink to the kitchen file.
+pub const GUEST_MISE_GLOBAL_CONFIG: &str = "/root/.config/mise/config.toml";
+
+/// Guest `PATH`: mise's shims and install dir ahead of microsandbox's default,
+/// so bootstrapped tools work in `exec` and shells without activation.
+pub const GUEST_PATH: &str = "/root/.local/share/mise/shims:/root/.local/bin:/.msb/scripts:\
+/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+
 /// Published ports listen on host loopback only.
 const PORT_BIND: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST);
 
@@ -53,6 +61,7 @@ pub fn builder(plan: &SandboxPlan) -> SandboxBuilder {
         .hostname(&plan.name)
         .shell("/bin/bash")
         .init(GUEST_INIT)
+        .env("PATH", GUEST_PATH)
         .volume(MISE_CACHE_GUEST_PATH, |mount| {
             mount.named_with(MISE_CACHE_VOLUME, |volume| volume.ensure_exists())
         });

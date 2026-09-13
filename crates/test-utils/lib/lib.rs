@@ -103,6 +103,12 @@ impl TestKitchen {
             .expect("running microkitchen")
     }
 
+    /// Remove this kitchen's sandbox on drop, for tests that create it
+    /// without [`TestKitchen::up`] (e.g. expecting `up` to fail).
+    pub fn track_sandbox(&self) {
+        self.has_sandbox.set(true);
+    }
+
     /// `microkitchen up --no-shell`, asserting success.
     pub fn up(&self) -> Output {
         self.up_with(|_| {})

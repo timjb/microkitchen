@@ -7,7 +7,7 @@ use anyhow::{Context, Result, bail};
 use microsandbox::Sandbox;
 use microsandbox::sandbox::{SandboxHandle, SandboxStatus};
 
-use super::build::{self, GUEST_KITCHEN_DIR};
+use super::build::{self, GUEST_KITCHEN_DIR, GUEST_MISE_GLOBAL_CONFIG};
 use super::labels;
 use super::plan::SandboxPlan;
 
@@ -120,9 +120,13 @@ pub async fn remove(handle: &SandboxHandle) -> Result<()> {
         .with_context(|| format!("removing sandbox {}", handle.name()))
 }
 
-/// Write `/root/kitchen/mise.toml` in the guest.
+/// Write `/root/kitchen/mise.toml` in the guest and make it mise's global config.
 pub async fn write_guest_config(sandbox: &Sandbox, contents: &str) -> Result<()> {
-    let script = format!("mkdir -p {GUEST_KITCHEN_DIR} && cat > {GUEST_KITCHEN_DIR}/mise.toml");
+    let script = format!(
+        "mkdir -p {GUEST_KITCHEN_DIR} \"$(dirname {GUEST_MISE_GLOBAL_CONFIG})\" \
+         && cat > {GUEST_KITCHEN_DIR}/mise.toml \
+         && ln -sfn {GUEST_KITCHEN_DIR}/mise.toml {GUEST_MISE_GLOBAL_CONFIG}"
+    );
     let output = sandbox
         .exec_with("sh", |e| {
             e.args(["-c", script.as_str()])

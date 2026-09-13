@@ -17,8 +17,16 @@ name = "microkitchen"
 path = "bin/main.rs"
 
 [[test]]
+name = "bootstrap"
+path = "tests/bootstrap.rs"
+
+[[test]]
 name = "config_discovery"
 path = "tests/config_discovery.rs"
+
+[[test]]
+name = "mise_cache_volume"
+path = "tests/mise_cache_volume.rs"
 
 [[test]]
 name = "docker_in_sandbox"

@@ -250,7 +250,7 @@ optional ones fall back to `default`) and `[_.microkitchen]`, but strips
 | Env/secrets | §4 | |
 | Init | `.init("auto")` | Resolves to the image's `/sbin/init` (systemd); the image's enabled `docker.service` starts dockerd on every boot, and `up`/`start` wait for `docker info` (90 s). Verified in milestone 2: an `entrypoint`/startup command runs only at *create* (the SDK's launch intent is not persisted), processes backgrounded from `exec` keep the exec from returning, and handing PID 1 to `supervisord` breaks exec |
 | Guest helper | `.script("mk-whodial", include_str!("scripts/guest/whodial.sh"))` | lands in `/.msb/scripts/mk-whodial` (on `PATH`) |
-| Guest config | `.patch(\|p\| p.text("/root/kitchen/mise.toml", rendered, None, true))` | `mise bootstrap` runs with `-C /root/kitchen` |
+| Guest config | written after boot through `exec` (stdin → `/root/kitchen/mise.toml`), symlinked as mise's global config `/root/.config/mise/config.toml` | tools resolve from any directory (mounts included) and the global config needs no `mise trust`; guest `PATH` starts with mise's shims so `exec` and shells see tools without activation |
 | Mode | `.create_detached()` | |
 
 **Endpoints are immutable per sandbox**: `modify()` has no proxy/DNS fields, so
@@ -273,15 +273,17 @@ Once after first boot, and on `microkitchen bootstrap`:
 1. `admin.mode(sandbox, Open)`.
 2. In guest, streamed to the terminal and `bootstrap.log`:
    ```
-   curl -fsSL https://mise.run | sh
-   mise -C /root/kitchen trust
-   mise -C /root/kitchen bootstrap --yes     # cache dir = the shared volume
+   command -v mise || curl -fsSL https://mise.run | [MISE_VERSION=v…] sh
+   cd /root && mise bootstrap --yes          # global config; cache dir = the shared volume
    ```
-3. `admin.mode(sandbox, Enforce)`; label `microkitchen.bootstrapped=true`.
+3. `admin.mode(sandbox, Enforce)`; record `bootstrapped=true` in `state.json`
+   (authoritative) and on the `microkitchen.bootstrapped` label (best effort:
+   microsandbox 0.6.18 cannot update labels of a running sandbox, so the label
+   may only change at the next start).
 
-On failure the sandbox stays up in enforce mode with the label `false`;
-`microkitchen bootstrap` retries. `MISE_VERSION` in `~/.microkitchen/config.toml`
-pins the installed mise.
+On failure the sandbox stays up in enforce mode with `bootstrapped=false`;
+`microkitchen bootstrap` retries. `mise_version = "2026.9.6"` in
+`~/.microkitchen/config.toml` pins the installed mise.
 
 ---
 

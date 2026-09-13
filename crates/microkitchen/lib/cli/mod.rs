@@ -263,6 +263,7 @@ pub async fn run(cli: Cli) -> Result<ExitCode> {
         Command::Down { purge } => lifecycle::down(&ctx, purge).await,
         Command::Status => lifecycle::status(&ctx).await,
         Command::List => lifecycle::list(&ctx).await,
+        Command::Bootstrap => lifecycle::bootstrap(&ctx).await,
         Command::Validate => validate::run(&ctx),
         Command::Net(NetCommand::Allow { rule, global }) => {
             net::set_rule(&ctx, RuleList::Allow, &rule, global)
