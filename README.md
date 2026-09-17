@@ -42,7 +42,9 @@ dialog backend is implemented but untested.
   macOS's built-in `osascript`. `notify-send` is used for notifications when
   present. Without a dialog, approvals fall back to the command line (see
   [Headless use](#headless-use)).
-- Rust (edition 2024) to build.
+- Rust (edition 2024) to build, plus a C toolchain and `libcap-ng`'s development
+  headers (`libcap-ng-dev` on Debian/Ubuntu, `libcap-ng-devel` on Fedora),
+  needed to link microsandbox's krun-based VMM backend.
 
 ## Install
 
