@@ -5,6 +5,7 @@ mod lifecycle;
 mod logs;
 mod net;
 mod remodel;
+mod ui;
 mod validate;
 
 use std::io::IsTerminal;

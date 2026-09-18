@@ -3,13 +3,14 @@
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Result, bail};
 use microsandbox::Sandbox;
 use microsandbox::sandbox::SandboxHandle;
 use serde::Serialize;
 
+use super::ui::{self, PullProgressDisplay, Spinner};
 use super::{Context, UpArgs, print_diagnostics};
 use crate::broker::client::BrokerClient;
 use crate::broker::protocol::Mode;
@@ -69,13 +70,12 @@ pub(super) async fn up(ctx: &Context, args: &UpArgs) -> Result<ExitCode> {
     let mut plan = SandboxPlan::from_project(&project)?;
     let preset = plan.config.network.preset;
 
-    let sandbox = match lifecycle::find(&plan.kitchen_file).await? {
+    let (sandbox, booted) = match lifecycle::find(&plan.kitchen_file).await? {
         Some(handle) if args.recreate => {
-            say(ctx, format!("removing {}", handle.name()));
-            lifecycle::remove(&handle).await?;
+            remove(ctx, &handle).await?;
             retire(ctx, handle.name()).await;
             plan.egress = connect_egress(ctx, &plan.name, &plan.kitchen_file, preset, true).await?;
-            create(ctx, &plan).await?
+            (create(ctx, &plan).await?, true)
         }
         Some(handle) => {
             if label(&handle, labels::CONFIG_HASH).as_deref() != Some(plan.config_hash.as_str()) {
@@ -85,19 +85,16 @@ pub(super) async fn up(ctx: &Context, args: &UpArgs) -> Result<ExitCode> {
                      run `microkitchen remodel` to apply the changes",
                 );
             }
-            if !is_active(handle.status_snapshot()) {
-                say(ctx, format!("starting {}", handle.name()));
-            }
-            start_mediated(ctx, &handle).await?
+            let booted = !is_active(handle.status_snapshot());
+            (start_mediated(ctx, &handle).await?, booted)
         }
         None => {
             plan.egress = connect_egress(ctx, &plan.name, &plan.kitchen_file, preset, true).await?;
-            create(ctx, &plan).await?
+            (create(ctx, &plan).await?, true)
         }
     };
 
-    say(ctx, "waiting for Docker");
-    lifecycle::wait_for_docker(&sandbox, DOCKER_READY_TIMEOUT).await?;
+    wait_for_docker(ctx, &sandbox, booted).await?;
 
     let bootstrapped = SandboxState::load(&ctx.home, &plan.name)?.is_some_and(|s| s.bootstrapped);
     if !bootstrapped {
@@ -123,7 +120,11 @@ pub(super) async fn exec(ctx: &Context, command: &[String]) -> Result<ExitCode> 
     if std::io::stdin().is_terminal() && std::io::stdout().is_terminal() {
         return Ok(exit_code(sandbox.attach(program, args).await?));
     }
-    let output = sandbox.exec(program, args).await?;
+    // The output is the result: the spinner leaves no line behind.
+    let spinner = Spinner::new(ctx.quiet, "Running", &command.join(" "));
+    let output = sandbox.exec(program, args).await;
+    spinner.finish_clear();
+    let output = output?;
     std::io::stdout().write_all(output.stdout_bytes())?;
     std::io::stderr().write_all(output.stderr_bytes())?;
     Ok(exit_code(output.status().code))
@@ -131,26 +132,37 @@ pub(super) async fn exec(ctx: &Context, command: &[String]) -> Result<ExitCode> 
 
 pub(super) async fn start(ctx: &Context) -> Result<ExitCode> {
     let handle = require(ctx).await?;
+    let booted = !is_active(handle.status_snapshot());
+    if !booted {
+        say(ctx, format!("{} is already running", handle.name()));
+    }
     let sandbox = start_mediated(ctx, &handle).await?;
-    lifecycle::wait_for_docker(&sandbox, DOCKER_READY_TIMEOUT).await?;
-    say(ctx, format!("{} is running", handle.name()));
+    wait_for_docker(ctx, &sandbox, booted).await?;
     Ok(ExitCode::SUCCESS)
 }
 
 pub(super) async fn stop(ctx: &Context) -> Result<ExitCode> {
     let handle = require(ctx).await?;
-    lifecycle::stop(&handle).await?;
-    say(ctx, format!("{} is stopped", handle.name()));
+    if is_active(handle.status_snapshot()) {
+        Spinner::new(ctx.quiet, "Stopping", handle.name())
+            .run("Stopped", lifecycle::stop(&handle))
+            .await?;
+    } else {
+        say(ctx, format!("{} is already stopped", handle.name()));
+    }
     Ok(ExitCode::SUCCESS)
 }
 
 pub(super) async fn restart(ctx: &Context) -> Result<ExitCode> {
     let handle = require(ctx).await?;
-    lifecycle::stop(&handle).await?;
+    if is_active(handle.status_snapshot()) {
+        Spinner::new(ctx.quiet, "Stopping", handle.name())
+            .run("Stopped", lifecycle::stop(&handle))
+            .await?;
+    }
     let handle = handle.refresh().await?;
     let sandbox = start_mediated(ctx, &handle).await?;
-    lifecycle::wait_for_docker(&sandbox, DOCKER_READY_TIMEOUT).await?;
-    say(ctx, format!("{} restarted", handle.name()));
+    wait_for_docker(ctx, &sandbox, true).await?;
     Ok(ExitCode::SUCCESS)
 }
 
@@ -159,9 +171,8 @@ pub(super) async fn down(ctx: &Context, purge: bool) -> Result<ExitCode> {
     let name = name_of(&discovery);
     match lifecycle::find(&discovery.kitchen_file).await? {
         Some(handle) => {
-            lifecycle::remove(&handle).await?;
+            remove(ctx, &handle).await?;
             retire(ctx, handle.name()).await;
-            say(ctx, format!("removed {}", handle.name()));
         }
         None => say(
             ctx,
@@ -249,8 +260,9 @@ pub(super) async fn list(ctx: &Context) -> Result<ExitCode> {
 
 pub(super) async fn bootstrap(ctx: &Context) -> Result<ExitCode> {
     let handle = require(ctx).await?;
+    let booted = !is_active(handle.status_snapshot());
     let sandbox = start_mediated(ctx, &handle).await?;
-    lifecycle::wait_for_docker(&sandbox, DOCKER_READY_TIMEOUT).await?;
+    wait_for_docker(ctx, &sandbox, booted).await?;
     run_bootstrap(ctx, &sandbox, handle.name()).await?;
     Ok(ExitCode::SUCCESS)
 }
@@ -280,14 +292,18 @@ async fn run_bootstrap(ctx: &Context, sandbox: &Sandbox, name: &str) -> Result<(
 }
 
 async fn create(ctx: &Context, plan: &SandboxPlan) -> Result<Sandbox> {
-    say(
-        ctx,
-        format!(
-            "creating {} from {IMAGE} (the first start pulls the image)",
-            plan.name
-        ),
+    let started = Instant::now();
+    let mut display = PullProgressDisplay::new(
+        ctx.quiet,
+        IMAGE,
+        &format!("{:<12} {}", "Creating", plan.name),
     );
-    let sandbox = lifecycle::create(plan).await?;
+    let result = lifecycle::create(plan, |event| display.handle_event(event)).await;
+    display.finish();
+    let sandbox = result?;
+    if !ctx.quiet {
+        ui::success("Created", &plan.name, started.elapsed());
+    }
     SandboxState {
         name: plan.name.clone(),
         kitchen_file: plan.kitchen_file.clone(),
@@ -312,7 +328,13 @@ pub(super) async fn start_mediated(ctx: &Context, handle: &SandboxHandle) -> Res
         let preset = state.applied.network.preset;
         connect_egress(ctx, handle.name(), &state.kitchen_file, preset, false).await?;
     }
-    let sandbox = lifecycle::start(handle).await?;
+    let sandbox = if is_active(handle.status_snapshot()) {
+        lifecycle::start(handle).await?
+    } else {
+        Spinner::new(ctx.quiet, "Starting", handle.name())
+            .run("Started", lifecycle::start(handle))
+            .await?
+    };
     if let Some(mut state) = state
         && state.guest_config_pending
     {
@@ -323,6 +345,23 @@ pub(super) async fn start_mediated(ctx: &Context, handle: &SandboxHandle) -> Res
         state.save(&ctx.home)?;
     }
     Ok(sandbox)
+}
+
+/// Wait until dockerd answers. Only a sandbox that just `booted` shows it:
+/// in one that was already running, Docker is up.
+async fn wait_for_docker(ctx: &Context, sandbox: &Sandbox, booted: bool) -> Result<()> {
+    Spinner::new(ctx.quiet || !booted, "Starting", "Docker")
+        .run(
+            "Started",
+            lifecycle::wait_for_docker(sandbox, DOCKER_READY_TIMEOUT),
+        )
+        .await
+}
+
+async fn remove(ctx: &Context, handle: &SandboxHandle) -> Result<()> {
+    Spinner::new(ctx.quiet, "Removing", handle.name())
+        .run("Removed", lifecycle::remove(handle))
+        .await
 }
 
 /// Register the sandbox with the broker (starting the broker if needed). A

@@ -7,8 +7,8 @@ broker that asks before the sandbox talks to anything new.
 
 ```console
 $ microkitchen
-creating mk-api-1a2b3c4d from cruizba/ubuntu-dind:noble-latest
-waiting for Docker
+   ✓ Created      mk-api-1a2b3c4d (41.2s)
+   ✓ Started      Docker (27.3s)
 running mise bootstrap (log: ~/.microkitchen/logs/mk-api-1a2b3c4d/bootstrap.log)
 root@mk-api-1a2b3c4d:~#
 ```
@@ -116,6 +116,11 @@ Run it again to get back into the same sandbox; `microkitchen down` removes it.
 Global options: `-C <dir>` (run as if in `<dir>`), `--home <dir>` (state
 directory, default `~/.microkitchen`, or `MICROKITCHEN_HOME`), `-v`/`-q`, and
 `--json` for machine-readable output where supported.
+
+Pulling the image, creating, starting, stopping and removing the sandbox, and
+non-interactive `exec`, show a progress spinner on stderr when it is a
+terminal (with per-layer bars while the image is pulled). Finished steps leave
+a `✓` line; `exec` leaves only the command's own output.
 
 ## Configuration
 

@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use microsandbox::Sandbox;
-use microsandbox::sandbox::{SandboxHandle, SandboxStatus};
+use microsandbox::sandbox::{PullProgress, SandboxHandle, SandboxStatus};
 
 use super::build::{self, GUEST_KITCHEN_DIR, GUEST_MISE_GLOBAL_CONFIG};
 use super::labels;
@@ -79,11 +79,22 @@ pub fn status_name(status: SandboxStatus) -> String {
 }
 
 /// Create the sandbox detached from this process and write the guest config.
-pub async fn create(plan: &SandboxPlan) -> Result<Sandbox> {
-    let sandbox = build::builder(plan)
-        .create_detached()
+/// `on_progress` sees the image pull's events until the sandbox is created.
+pub async fn create(
+    plan: &SandboxPlan,
+    mut on_progress: impl FnMut(PullProgress),
+) -> Result<Sandbox> {
+    let creating = || format!("creating sandbox {}", plan.name);
+    let (mut progress, task) = build::builder(plan)
+        .create_detached_with_pull_progress()
+        .with_context(creating)?;
+    while let Some(event) = progress.recv().await {
+        on_progress(event);
+    }
+    let sandbox = task
         .await
-        .with_context(|| format!("creating sandbox {}", plan.name))?;
+        .context("the sandbox creation task failed")?
+        .with_context(creating)?;
     write_guest_config(&sandbox, &plan.guest_config).await?;
     Ok(sandbox)
 }
