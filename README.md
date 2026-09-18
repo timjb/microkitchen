@@ -107,7 +107,7 @@ Run it again to get back into the same sandbox; `microkitchen down` removes it.
 | `down [--purge]` | Remove the sandbox; `--purge` also deletes its state and logs (never the shared mise cache). |
 | `status`, `list` | This project's sandbox; all sandboxes microkitchen created. |
 | `logs [--bootstrap \| --broker \| --sandbox]` | The bootstrap log (default), the broker's log, or the sandbox's own output. |
-| `bootstrap` | Run `mise bootstrap` again, e.g. after adding tools. |
+| `bootstrap` | Run `mise bootstrap` again, e.g. after a failed install (`remodel` runs it after tool changes). |
 | `validate` | Check the configuration and resolve the environment without creating anything. |
 | `remodel [--yes] [--recreate]` | Apply configuration changes to the existing sandbox ([details](#changing-a-sandbox-remodel)). |
 | `net …` | Network rules and approvals ([details](#rules-and-commands)). |
@@ -275,9 +275,9 @@ connection; nothing restarts. `~/.microkitchen/rules.toml` holds top-level
 
 ## Changing a sandbox: `remodel`
 
-After editing the kitchen file, `microkitchen remodel` shows a diff against
-what the sandbox runs with, says when each change takes effect, and asks before
-applying (`--yes` skips the question):
+After editing the kitchen file, `microkitchen remodel` lists what changed
+compared with what the sandbox runs with, says when each change takes effect,
+and asks before applying (`--yes` skips the question):
 
 | Change | Takes effect |
 |---|---|
@@ -286,9 +286,10 @@ applying (`--yes` skips the question):
 | `disk`, environment variables, secrets | After `microkitchen restart` (at the next start for a stopped sandbox). |
 | `mounts`, `ports`, `network` | Need a new sandbox: `microkitchen remodel --recreate` (only the mise cache is kept). |
 
-`remodel` also updates the guest's `mise.toml`; run `microkitchen bootstrap` to
-install newly added tools. It only ever removes environment variables that came
-from the kitchen file, never the image's own.
+When tools or `[env]` change, `remodel` also updates the guest's `mise.toml`
+and runs `mise bootstrap` to install new tools; a stopped sandbox is started
+for this and stopped again. It only ever removes environment variables that
+came from the kitchen file, never the image's own.
 
 ## Settings
 
@@ -334,10 +335,11 @@ in the `microkitchen-mise-cache` volume, shared by all kitchens.
   `{ default = "" }`; they are injected only when set on the host.
 - Variables that mise passes through unchanged from the host environment (for
   example `{ required = true }` ones) are read from the host directly.
-- `[tools]` are installed by `mise bootstrap` inside the guest, once. Run
-  `microkitchen bootstrap` after changing them.
-- Inside the guest the kitchen file is `/root/kitchen/mise.toml`, linked as
-  mise's global config, so tools work from any directory (mounts included).
+- `[tools]` are installed by `mise bootstrap` inside the guest when the
+  sandbox is created and again by `microkitchen remodel` after they change.
+- Inside the guest the kitchen file is `/root/kitchen/mise.toml` (without the
+  `[_.microkitchen]` table), linked as mise's global config, so tools work
+  from any directory (mounts included).
 
 ## Development
 

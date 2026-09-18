@@ -8,8 +8,6 @@
 
 use std::collections::BTreeMap;
 
-use similar::TextDiff;
-
 use crate::config::hostpat::HostPattern;
 use crate::config::schema::{KitchenConfig, Mount, NetworkPreset, PortMapping, Protocol};
 
@@ -173,20 +171,6 @@ pub fn env_patch(
         }
     }
     patch
-}
-
-/// A unified diff of the kitchen file, or `None` when the text is unchanged.
-pub fn text_diff(old: &str, new: &str, path: &str) -> Option<String> {
-    if old == new {
-        return None;
-    }
-    let diff = TextDiff::from_lines(old, new);
-    Some(
-        diff.unified_diff()
-            .context_radius(3)
-            .header(&format!("{path} (applied)"), path)
-            .to_string(),
-    )
 }
 
 pub fn format_mib(mib: u32) -> String {
@@ -387,17 +371,6 @@ mod tests {
         let unchanged = BTreeMap::from([current[0].clone(), current[1].clone()]);
         assert!(env_patch(&current, &unchanged, &[]).is_empty());
         assert!(env_patch(&current[..2], &unchanged, &managed).is_empty());
-    }
-
-    #[test]
-    fn text_diffs_are_unified() {
-        assert_eq!(text_diff("a\n", "a\n", "mise.toml"), None);
-        let diff = text_diff("[env]\nA = \"1\"\n", "[env]\nA = \"2\"\n", "mise.toml").unwrap();
-        assert!(diff.contains("--- mise.toml (applied)"), "{diff}");
-        assert!(
-            diff.contains("-A = \"1\"") && diff.contains("+A = \"2\""),
-            "{diff}"
-        );
     }
 
     #[test]

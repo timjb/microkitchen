@@ -16,6 +16,7 @@ use microsandbox::sandbox::{
     SandboxModificationPlan,
 };
 
+use super::ui::Spinner;
 use super::{Context, UpArgs, lifecycle as commands, print_diagnostics};
 use crate::config::Project;
 use crate::config::hostpat::HostPattern;
@@ -188,14 +189,7 @@ pub(super) async fn run(ctx: &Context, yes: bool, recreate: bool) -> Result<Exit
         return Ok(ExitCode::SUCCESS);
     }
 
-    show(
-        ctx,
-        &state,
-        &plan,
-        &changes,
-        dry_run.as_ref(),
-        guest_changed,
-    );
+    show(ctx, &changes, dry_run.as_ref(), guest_changed);
     if let Some(dry_run) = &dry_run {
         if !dry_run.conflicts.is_empty() {
             for conflict in &dry_run.conflicts {
@@ -265,33 +259,10 @@ pub(super) async fn run(ctx: &Context, yes: bool, recreate: bool) -> Result<Exit
     state.config_hash = config_hash(&state.applied);
     state.applied_text = Some(plan.kitchen_text.clone());
     state.env_keys = plan.env.keys().cloned().collect();
-    if guest_changed {
-        if running {
-            let sandbox = handle.connect().await?;
-            lifecycle::write_guest_config(&sandbox, &plan.guest_config).await?;
-        } else {
-            state.guest_config_pending = true;
-        }
-    }
     state.save(&ctx.home)?;
     set_label(&handle, labels::CONFIG_HASH, &state.config_hash).await;
 
     say(ctx, format!("remodeled {name}"));
-    if !after_restart.is_empty() {
-        let what = after_restart
-            .iter()
-            .map(|g| format!("{g:?}").to_lowercase())
-            .collect::<Vec<_>>()
-            .join(", ");
-        if running {
-            say(
-                ctx,
-                format!("run `microkitchen restart` to apply the {what} changes"),
-            );
-        } else {
-            say(ctx, format!("the {what} changes apply at the next start"));
-        }
-    }
     if !pending_recreate.is_empty() {
         let fields = pending_recreate
             .iter()
@@ -306,13 +277,54 @@ pub(super) async fn run(ctx: &Context, yes: bool, recreate: bool) -> Result<Exit
             ),
         );
     }
+    if !after_restart.is_empty() {
+        let what = after_restart
+            .iter()
+            .map(|g| format!("{g:?}").to_lowercase())
+            .collect::<Vec<_>>()
+            .join(", ");
+        if running {
+            say(
+                ctx,
+                format!("run `microkitchen restart` to apply the {what} changes"),
+            );
+        } else if !guest_changed {
+            // Otherwise the sandbox starts below, which applies them.
+            say(ctx, format!("the {what} changes apply at the next start"));
+        }
+    }
     if guest_changed {
-        say(
-            ctx,
-            "the guest's mise.toml is updated; run `microkitchen bootstrap` to install new tools",
-        );
+        install_tools(ctx, &handle, &plan.guest_config, running).await?;
     }
     Ok(ExitCode::SUCCESS)
+}
+
+/// Update the guest's `mise.toml` and run `mise bootstrap` so new tools are
+/// installed. A stopped sandbox is started for it and stopped again.
+async fn install_tools(
+    ctx: &Context,
+    handle: &SandboxHandle,
+    guest_config: &str,
+    running: bool,
+) -> Result<()> {
+    if running {
+        let sandbox = handle.connect().await?;
+        lifecycle::write_guest_config(&sandbox, guest_config).await?;
+        return commands::run_bootstrap(ctx, &sandbox, handle.name()).await;
+    }
+
+    let handle = handle.refresh().await?;
+    let sandbox = commands::start_mediated(ctx, &handle).await?;
+    let result = async {
+        lifecycle::write_guest_config(&sandbox, guest_config).await?;
+        commands::run_bootstrap(ctx, &sandbox, handle.name()).await
+    }
+    .await;
+    let handle = handle.refresh().await?;
+    Spinner::new(ctx.quiet, "Stopping", handle.name())
+        .run("Stopped", lifecycle::stop(&handle))
+        .await?;
+    result
 }
 
 /// The SDK-managed part of the change. Resources come from the recorded
@@ -388,28 +400,10 @@ fn secret_host(pattern: &HostPattern) -> Option<String> {
 
 fn show(
     ctx: &Context,
-    state: &SandboxState,
-    plan: &SandboxPlan,
     changes: &[Change],
     dry_run: Option<&SandboxModificationPlan>,
     guest_changed: bool,
 ) {
-    let file = plan
-        .kitchen_file
-        .file_name()
-        .map_or_else(|| "mise.toml".into(), |n| n.to_string_lossy().into_owned());
-    match &state.applied_text {
-        Some(old) => {
-            if let Some(diff) = remodel::text_diff(old, &plan.kitchen_text, &file) {
-                println!("{diff}");
-            }
-        }
-        None => say(
-            ctx,
-            "(this sandbox predates recorded kitchen files; showing the changes only)",
-        ),
-    }
-
     println!("changes:");
     for change in changes {
         let how = match change.route {
@@ -447,7 +441,7 @@ fn show(
     }
     if guest_changed {
         println!(
-            "  {:<22} updated in the guest (new tools need `microkitchen bootstrap`)",
+            "  {:<22} updated in the guest; mise bootstrap installs new tools",
             "mise.toml"
         );
     }

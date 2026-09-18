@@ -3,7 +3,9 @@
 //! `[env]` declarations stay, so `mise bootstrap` in the guest sees the same
 //! variables (required ones are satisfied by injected env vars and secret
 //! placeholders). Host-file directives (`_.file`, `_.source`, `_.path`) are
-//! removed so `.env` values and host paths never enter the guest.
+//! removed so `.env` values and host paths never enter the guest. The
+//! `[_.microkitchen]` table configures the sandbox from the host; the guest
+//! gets no copy, so it changes only when something mise uses does.
 
 use anyhow::{Context, Result};
 use toml_edit::{DocumentMut, Item, TableLike};
@@ -25,6 +27,12 @@ const HOST_DIRECTIVES: &[&str] = &["file", "source", "path"];
 /// Render the guest copy of the kitchen file, preserving everything else.
 pub fn render_guest_config(text: &str) -> Result<String> {
     let mut document: DocumentMut = text.parse().context("parsing the kitchen file")?;
+    if let Some(user) = document.get_mut("_").and_then(Item::as_table_like_mut) {
+        user.remove("microkitchen");
+        if user.is_empty() {
+            document.remove("_");
+        }
+    }
     match document.get_mut("env") {
         None => {}
         Some(Item::ArrayOfTables(tables)) => {
@@ -90,10 +98,25 @@ cpus = 2
             "A = \"1\"",
             "REQ = { required = true }",
             "node = \"22\"",
-            "[_.microkitchen]",
         ] {
             assert!(out.contains(kept), "{kept} missing:\n{out}");
         }
+        assert!(!out.contains("microkitchen"), "{out}");
+    }
+
+    #[test]
+    fn keeps_other_user_tables() {
+        let text = "[tools]\nnode = \"22\"\n\n[_.other]\na = 1\n\n[_.microkitchen]\ncpus = 2\n\n[_.microkitchen.network]\nallow = [\"a.com\"]\n";
+        let out = render_guest_config(text).unwrap();
+        assert!(out.contains("[_.other]") && out.contains("a = 1"), "{out}");
+        assert!(
+            !out.contains("microkitchen") && !out.contains("a.com"),
+            "{out}"
+        );
+
+        let out =
+            render_guest_config("[tools]\nnode = \"22\"\n\n[_.microkitchen]\ncpus = 2\n").unwrap();
+        assert_eq!(out, "[tools]\nnode = \"22\"\n");
     }
 
     #[test]

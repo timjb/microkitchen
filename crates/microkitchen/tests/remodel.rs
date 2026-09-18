@@ -48,8 +48,6 @@ async fn remodel_applies_changes_where_they_can_go() {
     k.write("mise.toml", CHANGED);
     let out = remodel(&k, &[]);
     for expected in [
-        "-GREETING = \"hello\"",
-        "+EXTRA = \"1\"",
         "cpus",
         "memory",
         "root_disk_size",
@@ -58,6 +56,11 @@ async fn remodel_applies_changes_where_they_can_go() {
     ] {
         assert!(out.contains(expected), "missing {expected:?} in:\n{out}");
     }
+    assert!(
+        !out.lines()
+            .any(|l| l.starts_with("---") || l.starts_with("+++")),
+        "no text diff:\n{out}"
+    );
 
     // The network rule is live: no prompt.
     let curl = [
@@ -119,4 +122,30 @@ async fn remodel_applies_changes_where_they_can_go() {
     remodel(&k, &["--recreate"]);
     assert_eq!(guest(&k, "cat /shared/hello.txt"), "from the host");
     assert!(up_to_date(&k));
+}
+
+fn running(k: &TestKitchen) -> bool {
+    let status: Value = serde_json::from_str(&stdout(&k.run("", &["status", "--json"]))).unwrap();
+    status["status"].as_str() == Some("running")
+}
+
+#[mk_test]
+async fn remodel_installs_new_tools() {
+    let k = TestKitchen::new(env!("CARGO_BIN_EXE_microkitchen"));
+    k.write("mise.toml", BASE);
+    k.up();
+
+    // Running: installed without `microkitchen bootstrap`.
+    k.write("mise.toml", &format!("[tools]\njq = \"1.7.1\"\n\n{BASE}"));
+    let out = remodel(&k, &[]);
+    assert!(out.contains("mise.toml"), "{out}");
+    assert_eq!(guest(&k, "jq --version"), "jq-1.7.1");
+
+    // Stopped: started for the bootstrap and stopped again.
+    let stop = k.run("", &["stop"]);
+    assert!(stop.status.success(), "{}", text(&stop));
+    k.write("mise.toml", &format!("[tools]\njq = \"1.8.1\"\n\n{BASE}"));
+    remodel(&k, &[]);
+    assert!(!running(&k));
+    assert_eq!(guest(&k, "jq --version"), "jq-1.8.1");
 }

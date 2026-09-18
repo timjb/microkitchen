@@ -268,7 +268,7 @@ pub(super) async fn bootstrap(ctx: &Context) -> Result<ExitCode> {
 }
 
 /// Run `mise bootstrap` and record the result in `state.json` and the label.
-async fn run_bootstrap(ctx: &Context, sandbox: &Sandbox, name: &str) -> Result<()> {
+pub(super) async fn run_bootstrap(ctx: &Context, sandbox: &Sandbox, name: &str) -> Result<()> {
     let settings = Settings::load(&ctx.home)?;
     let log = ctx.home.logs_dir().join(name).join("bootstrap.log");
     say(
