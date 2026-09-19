@@ -119,6 +119,12 @@ pub fn diff(applied: &KitchenConfig, desired: &KitchenConfig) -> Vec<Change> {
         mounts(&desired.mounts),
         Route::Recreate,
     );
+    push(
+        "user",
+        applied.user.to_string(),
+        desired.user.to_string(),
+        Route::Recreate,
+    );
 
     let names = applied.secrets.keys().chain(desired.secrets.keys());
     let mut seen = Vec::new();
@@ -148,6 +154,7 @@ pub fn applied_without_recreate(applied: &KitchenConfig, desired: &KitchenConfig
     result.mounts = applied.mounts.clone();
     result.network.preset = applied.network.preset;
     result.network.ports = applied.network.ports.clone();
+    result.user = applied.user;
     result
 }
 
@@ -266,6 +273,7 @@ mod tests {
             guest: "/work".into(),
             readonly: true,
         }];
+        desired.user.uid = 2000;
         let changes = diff(&applied, &desired);
         assert_eq!(
             fields(&changes),
@@ -275,11 +283,13 @@ mod tests {
                 ("network.allow", Route::Broker),
                 ("network.ports", Route::Recreate),
                 ("mounts", Route::Recreate),
+                ("user", Route::Recreate),
             ]
         );
         assert_eq!(changes[1].after, "2G");
         assert_eq!(changes[3].after, "8080:80");
         assert_eq!(changes[4].after, "/src -> /work (read-only)");
+        assert_eq!(changes[5].after, "2000:1001");
     }
 
     #[test]
@@ -334,8 +344,10 @@ mod tests {
             guest: "/work".into(),
             readonly: false,
         }];
+        desired.user.uid = 2000;
         let result = applied_without_recreate(&applied, &desired);
         assert_eq!(result.cpus, 4);
+        assert_eq!(result.user, applied.user);
         assert_eq!(result.network.preset, applied.network.preset);
         assert!(result.mounts.is_empty());
         assert!(

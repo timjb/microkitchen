@@ -28,17 +28,26 @@ pub const GUEST_INIT: &str = "auto";
 /// Named volume shared by every kitchen for mise's cache.
 pub const MISE_CACHE_VOLUME: &str = "microkitchen-mise-cache";
 
-pub const MISE_CACHE_GUEST_PATH: &str = "/root/.cache/mise";
+/// mise's cache in the guest (`MISE_CACHE_DIR`), on the shared volume.
+pub const MISE_CACHE_GUEST_PATH: &str = "/var/cache/mise";
 
 /// Directory holding the guest copy of the kitchen file.
-pub const GUEST_KITCHEN_DIR: &str = "/root/kitchen";
+pub const GUEST_KITCHEN_DIR: &str = "/opt/kitchen";
 
-/// mise's global config in the guest; a symlink to the kitchen file.
-pub const GUEST_MISE_GLOBAL_CONFIG: &str = "/root/.config/mise/config.toml";
+/// mise's system config in the guest (`MISE_SYSTEM_CONFIG_FILE`): the kitchen
+/// file. Not the global config, which stays chef's own for `mise use -g`.
+pub const GUEST_MISE_SYSTEM_CONFIG: &str = "/opt/kitchen/mise.toml";
 
-/// Guest `PATH`: mise's shims and install dir ahead of microsandbox's default,
-/// so bootstrapped tools work in `exec` and shells without activation.
-pub const GUEST_PATH: &str = "/root/.local/share/mise/shims:/root/.local/bin:/.msb/scripts:\
+/// mise's installs and shims (`MISE_DATA_DIR`), owned by chef. Outside any
+/// home so root and chef see the same tools whatever chef's home is.
+pub const GUEST_MISE_DATA_DIR: &str = "/opt/mise";
+
+/// Where the bootstrap installs mise itself.
+pub const GUEST_MISE_BIN: &str = "/usr/local/bin/mise";
+
+/// Guest `PATH`: mise's shims ahead of microsandbox's default, so
+/// bootstrapped tools work in `exec` and shells without activation.
+pub const GUEST_PATH: &str = "/opt/mise/shims:/.msb/scripts:\
 /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 
 /// Guest `TMPDIR`: microsandbox mounts `/tmp` as a tmpfs capped at 512 MiB,
@@ -47,7 +56,17 @@ pub const GUEST_TMPDIR: &str = "/var/tmp";
 
 /// Variables microkitchen sets in every guest; the kitchen file's `env` may
 /// override them.
-pub const GUEST_ENV: &[(&str, &str)] = &[("PATH", GUEST_PATH), ("TMPDIR", GUEST_TMPDIR)];
+pub const GUEST_ENV: &[(&str, &str)] = &[
+    ("PATH", GUEST_PATH),
+    ("TMPDIR", GUEST_TMPDIR),
+    ("MISE_DATA_DIR", GUEST_MISE_DATA_DIR),
+    ("MISE_CACHE_DIR", MISE_CACHE_GUEST_PATH),
+    ("MISE_SYSTEM_CONFIG_FILE", GUEST_MISE_SYSTEM_CONFIG),
+];
+
+/// The user microkitchen's own guest commands run as; everything else runs as
+/// the sandbox's default user, chef.
+pub const ROOT: &str = "root";
 
 /// Published ports listen on host loopback only.
 const PORT_BIND: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST);
@@ -72,6 +91,8 @@ pub fn builder(plan: &SandboxPlan) -> SandboxBuilder {
         .max_memory(MAX_MEMORY_MIB)
         .hostname(&plan.name)
         .shell("/bin/bash")
+        // chef, by number: it only exists once bootstrap has run.
+        .user(config.user.to_string())
         .init(GUEST_INIT)
         // The broker's process attribution helper (design §8).
         .script(attribution::SCRIPT_NAME, attribution::SCRIPT)

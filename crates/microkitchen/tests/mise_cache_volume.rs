@@ -7,7 +7,7 @@ const KITCHEN: &str = "[_.microkitchen]\ncpus = 1\nmemory = \"1G\"\n";
 #[mk_test]
 async fn kitchens_share_the_mise_cache() {
     let bin = env!("CARGO_BIN_EXE_microkitchen");
-    let marker = format!("/root/.cache/mise/microkitchen-test-{}", std::process::id());
+    let marker = format!("/var/cache/mise/microkitchen-test-{}", std::process::id());
 
     let a = TestKitchen::new(bin);
     a.write("mise.toml", KITCHEN);

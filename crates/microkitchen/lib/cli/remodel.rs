@@ -159,10 +159,14 @@ pub(super) async fn run(ctx: &Context, yes: bool, recreate: bool) -> Result<Exit
 
     let changes = remodel::diff(&state.applied, &plan.config);
     let sdk = sdk_changes(&handle, &state, &plan)?;
-    let guest_changed = match &state.applied_text {
-        Some(text) => render_guest_config(text)? != plan.guest_config,
-        None => true,
-    };
+    // The guest's accounts must match the user the sandbox was created to run
+    // as, so the guest mise.toml waits for the new sandbox when chef's ids change.
+    let user_pending = changes.iter().any(|c| c.field == "user");
+    let guest_changed = !user_pending
+        && match &state.applied_text {
+            Some(text) => render_guest_config(text)? != plan.guest_config,
+            None => true,
+        };
     let dry_run = if sdk.groups().is_empty() {
         None
     } else {
@@ -257,7 +261,9 @@ pub(super) async fn run(ctx: &Context, yes: bool, recreate: bool) -> Result<Exit
     let running = is_active(handle.status_snapshot());
     state.applied = remodel::applied_without_recreate(&state.applied, &plan.config);
     state.config_hash = config_hash(&state.applied);
-    state.applied_text = Some(plan.kitchen_text.clone());
+    if !user_pending {
+        state.applied_text = Some(plan.kitchen_text.clone());
+    }
     state.env_keys = plan.env.keys().cloned().collect();
     state.save(&ctx.home)?;
     set_label(&handle, labels::CONFIG_HASH, &state.config_hash).await;
@@ -276,6 +282,12 @@ pub(super) async fn run(ctx: &Context, yes: bool, recreate: bool) -> Result<Exit
                  (only the mise cache is kept)"
             ),
         );
+        if user_pending {
+            say(
+                ctx,
+                "the guest mise.toml, which declares chef, waits for the new sandbox too",
+            );
+        }
     }
     if !after_restart.is_empty() {
         let what = after_restart
@@ -294,14 +306,15 @@ pub(super) async fn run(ctx: &Context, yes: bool, recreate: bool) -> Result<Exit
         }
     }
     if guest_changed {
-        install_tools(ctx, &handle, &plan.guest_config, running).await?;
+        apply_guest_config(ctx, &handle, &plan.guest_config, running).await?;
     }
     Ok(ExitCode::SUCCESS)
 }
 
-/// Update the guest's `mise.toml` and run `mise bootstrap` so new tools are
-/// installed. A stopped sandbox is started for it and stopped again.
-async fn install_tools(
+/// Update the guest's `mise.toml` and run `mise bootstrap` to apply it:
+/// tools, accounts and whatever else it declares. A stopped sandbox is
+/// started for it and stopped again.
+async fn apply_guest_config(
     ctx: &Context,
     handle: &SandboxHandle,
     guest_config: &str,
@@ -443,7 +456,7 @@ fn show(
     }
     if guest_changed {
         println!(
-            "  {:<22} updated in the guest; mise bootstrap installs new tools",
+            "  {:<22} updated in the guest; mise bootstrap applies it",
             "mise.toml"
         );
     }

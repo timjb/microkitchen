@@ -33,7 +33,15 @@ pub const MAX_MEMORY_MIB: u32 = 64 * 1024;
 pub const DEFAULT_DISK_MIB: u32 = 10 * 1024;
 
 /// Guest paths microkitchen mounts or writes itself; user mounts may not overlap them.
-pub const RESERVED_GUEST_PATHS: &[&str] = &["/root/.cache/mise", "/root/kitchen", "/.msb"];
+pub const RESERVED_GUEST_PATHS: &[&str] =
+    &["/var/cache/mise", "/opt/kitchen", "/opt/mise", "/.msb"];
+
+/// The sandbox user, declared as `[bootstrap.users.chef]` (a default otherwise).
+pub const CHEF: &str = "chef";
+
+/// chef's uid and its group's gid unless the kitchen file sets them. The
+/// image's own `ubuntu` user holds 1000.
+pub const DEFAULT_CHEF_ID: u32 = 1001;
 
 const SECTION_KEYS: &[&str] = &["cpus", "memory", "disk", "mounts", "network", "secrets"];
 
@@ -53,6 +61,19 @@ pub struct KitchenConfig {
     pub mounts: Vec<Mount>,
     pub network: NetworkConfig,
     pub secrets: BTreeMap<String, SecretConfig>,
+    /// The sandbox's default guest user. Absent from sandboxes created before
+    /// chef, which run as root.
+    #[serde(default = "GuestUser::root")]
+    pub user: GuestUser,
+}
+
+/// Numeric identity of the sandbox's default user. microsandbox resolves it
+/// at boot, before bootstrap creates chef, and maps bind-mounted host files
+/// to it; so it is fixed at creation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GuestUser {
+    pub uid: u32,
+    pub gid: u32,
 }
 
 /// A bind mount of a host directory into the guest.
@@ -189,13 +210,19 @@ pub fn parse(
         (None, None) => {
             return Some(ParsedKitchen {
                 location: None,
-                config: KitchenConfig::default(),
+                config: KitchenConfig {
+                    user: walker.guest_user(root),
+                    ..KitchenConfig::default()
+                },
                 spans: Spans::default(),
             });
         }
     };
 
-    let mut config = KitchenConfig::default();
+    let mut config = KitchenConfig {
+        user: walker.guest_user(root),
+        ..KitchenConfig::default()
+    };
     let mut spans = Spans::default();
     let path = location.table_path();
     if let Some(section) = walker.table(item, path) {
@@ -465,6 +492,83 @@ impl Walker<'_> {
         }
     }
 
+    /// chef's ids from `[bootstrap.users.chef]` and its primary group. Missing
+    /// ids default to [`DEFAULT_CHEF_ID`], which the guest copy of the kitchen
+    /// file then declares; a primary group other than chef must set its gid.
+    fn guest_user(&mut self, root: &dyn TableLike) -> GuestUser {
+        let mut user = GuestUser::default();
+        let bootstrap = root.get("bootstrap").and_then(Item::as_table_like);
+        let section = |name: &str| {
+            bootstrap
+                .and_then(|b| b.get(name))
+                .and_then(Item::as_table_like)
+        };
+        let Some(chef) = section("users")
+            .and_then(|users| users.get(CHEF))
+            .and_then(Item::as_table_like)
+        else {
+            return user;
+        };
+
+        if chef.get("state").and_then(Item::as_str) == Some("absent") {
+            self.error(
+                Self::key_span(chef, "state"),
+                "bootstrap.users.chef.state",
+                "chef is the sandbox's user and cannot be absent",
+            );
+        }
+        if let Some(item) = chef.get("uid")
+            && let Some(uid) = self.id(item, "bootstrap.users.chef.uid")
+        {
+            if uid == 0 {
+                self.error(
+                    item.span(),
+                    "bootstrap.users.chef.uid",
+                    "chef cannot be uid 0; microkitchen already offers root",
+                );
+            }
+            user.uid = uid;
+        }
+
+        let group = chef.get("group").and_then(Item::as_str).unwrap_or(CHEF);
+        let gid = section("groups")
+            .and_then(|groups| groups.get(group))
+            .and_then(Item::as_table_like)
+            .and_then(|g| g.get("gid"));
+        match gid {
+            Some(item) => {
+                if let Some(gid) = self.id(item, &format!("bootstrap.groups.{group}.gid")) {
+                    user.gid = gid;
+                }
+            }
+            None if group == CHEF => {}
+            None => self.error(
+                Self::key_span(chef, "group"),
+                "bootstrap.users.chef.group",
+                format!(
+                    "the sandbox's user is fixed when it is created, so chef's group needs \
+                     a known gid: declare `[bootstrap.groups.{group}]` with `gid = …`"
+                ),
+            ),
+        }
+        user
+    }
+
+    fn id(&mut self, item: &Item, key: &str) -> Option<u32> {
+        let id = item.as_integer().and_then(|v| u32::try_from(v).ok());
+        if id.is_none() {
+            self.error(
+                item.span(),
+                key,
+                format!(
+                    "expected a non-negative integer, found {}",
+                    item.type_name()
+                ),
+            );
+        }
+        id
+    }
+
     fn section(
         &mut self,
         section: &dyn TableLike,
@@ -708,7 +812,29 @@ impl Default for KitchenConfig {
             mounts: Vec::new(),
             network: NetworkConfig::default(),
             secrets: BTreeMap::new(),
+            user: GuestUser::default(),
         }
+    }
+}
+
+impl GuestUser {
+    pub fn root() -> Self {
+        Self { uid: 0, gid: 0 }
+    }
+}
+
+impl Default for GuestUser {
+    fn default() -> Self {
+        Self {
+            uid: DEFAULT_CHEF_ID,
+            gid: DEFAULT_CHEF_ID,
+        }
+    }
+}
+
+impl fmt::Display for GuestUser {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}:{}", self.uid, self.gid)
     }
 }
 
@@ -861,7 +987,7 @@ cpus = 65
 memory = "65G"
 disk = "10T"
 color = "blue"
-mounts = ["relative", "./a:/root/kitchen/x", "./b:/app", "./c:/app", 5]
+mounts = ["relative", "./a:/opt/kitchen/x", "./b:/app", "./c:/app", 5]
 
 [_.microkitchen.network]
 network = "closed"
@@ -887,7 +1013,7 @@ allow = ["x.com"]
             ":4:8: _.microkitchen.disk: unknown unit",
             ":5:1: _.microkitchen.color: unknown key `color`",
             "_.microkitchen.mounts[0]: expected `host:guest[:ro]`",
-            "_.microkitchen.mounts[1]: guest path `/root/kitchen/x` overlaps `/root/kitchen`",
+            "_.microkitchen.mounts[1]: guest path `/opt/kitchen/x` overlaps `/opt/kitchen`",
             "_.microkitchen.mounts[3]: guest path `/app` is mounted more than once",
             "_.microkitchen.mounts[4]: expected a string, found integer",
             "_.microkitchen.network.network: unknown preset `closed`",
@@ -941,5 +1067,67 @@ allow = ["x.com"]
         assert!(!is_env_name("1X"));
         assert!(!is_env_name("A-B"));
         assert!(!is_env_name(""));
+    }
+
+    fn user(text: &str) -> (GuestUser, Vec<String>) {
+        let (parsed, diagnostics) = parse_str(text);
+        (parsed.unwrap().config.user, errors(&diagnostics))
+    }
+
+    #[test]
+    fn chef_defaults_without_a_declaration() {
+        assert_eq!(
+            user("[tools]\njq = \"1\"\n"),
+            (GuestUser::default(), vec![])
+        );
+        assert_eq!(
+            user("[_.microkitchen]\ncpus = 1\n\n[bootstrap.users.alice]\nuid = 5\n"),
+            (
+                GuestUser {
+                    uid: 1001,
+                    gid: 1001
+                },
+                vec![]
+            )
+        );
+    }
+
+    #[test]
+    fn chef_ids_come_from_the_declaration() {
+        let text = "[bootstrap.users.chef]\nuid = 2000\n\n[bootstrap.groups.chef]\ngid = 3000\n";
+        assert_eq!(
+            user(text),
+            (
+                GuestUser {
+                    uid: 2000,
+                    gid: 3000
+                },
+                vec![]
+            )
+        );
+
+        let text =
+            "[bootstrap.users.chef]\ngroup = \"staff\"\n\n[bootstrap.groups.staff]\ngid = 50\n";
+        assert_eq!(user(text), (GuestUser { uid: 1001, gid: 50 }, vec![]));
+    }
+
+    #[test]
+    fn chef_declarations_that_cannot_work_are_errors() {
+        let (_, errors) = user("[bootstrap.users.chef]\ngroup = \"staff\"\n");
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(
+            errors[0].contains("bootstrap.users.chef.group")
+                && errors[0].contains("[bootstrap.groups.staff]"),
+            "{errors:?}"
+        );
+
+        let (_, errors) = user("[bootstrap.users.chef]\nuid = 0\n");
+        assert!(errors[0].contains("cannot be uid 0"), "{errors:?}");
+
+        let (_, errors) = user("[bootstrap.users.chef]\nuid = -1\n");
+        assert!(errors[0].contains("non-negative integer"), "{errors:?}");
+
+        let (_, errors) = user("[bootstrap.users.chef]\nstate = \"absent\"\n");
+        assert!(errors[0].contains("cannot be absent"), "{errors:?}");
     }
 }

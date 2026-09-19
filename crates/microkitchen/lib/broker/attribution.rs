@@ -13,6 +13,7 @@ use microsandbox::Sandbox;
 use serde::{Deserialize, Serialize};
 
 use super::protocol::Transport;
+use crate::sandbox::build::ROOT;
 
 //--------------------------------------------------------------------------------------------------
 // Constants
@@ -90,7 +91,11 @@ pub async fn lookup(
     let run = async {
         let handle = Sandbox::get(sandbox).await.ok()?;
         let connected = handle.connect_with_timeout(DEADLINE).await.ok()?;
-        let output = connected.exec(SCRIPT_NAME, args).await.ok()?;
+        // Reading other users' /proc entries needs root.
+        let output = connected
+            .exec_with(SCRIPT_NAME, |e| e.args(args).user(ROOT))
+            .await
+            .ok()?;
         if !output.status().success {
             return None;
         }

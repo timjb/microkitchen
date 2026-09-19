@@ -89,6 +89,10 @@ name = "remodel"
 path = "tests/remodel.rs"
 
 [[test]]
+name = "sandbox_user"
+path = "tests/sandbox_user.rs"
+
+[[test]]
 name = "global_rules"
 path = "tests/global_rules.rs"
 

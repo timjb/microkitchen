@@ -7,7 +7,7 @@ const KITCHEN: &str = r#"[tools]
 jq = "1.7.1"
 
 [tasks.bootstrap]
-run = "echo ran > /root/bootstrap-marker"
+run = "echo ran > $HOME/bootstrap-marker"
 
 [_.microkitchen]
 cpus = 1
@@ -29,8 +29,13 @@ async fn bootstrap_installs_tools_and_runs_the_task() {
     assert_eq!(stdout(&k.exec(&["jq", "--version"])).trim(), "jq-1.7.1");
     let elsewhere = k.exec(&["sh", "-c", "cd /tmp && jq --version"]);
     assert_eq!(stdout(&elsewhere).trim(), "jq-1.7.1");
+    // The bootstrap task runs as chef, in chef's home.
     assert_eq!(
-        stdout(&k.exec(&["cat", "/root/bootstrap-marker"])).trim(),
+        stdout(&k.exec(&["stat", "-c", "%U %n", "/home/chef/bootstrap-marker"])).trim(),
+        "chef /home/chef/bootstrap-marker"
+    );
+    assert_eq!(
+        stdout(&k.exec(&["cat", "/home/chef/bootstrap-marker"])).trim(),
         "ran"
     );
 
@@ -62,7 +67,7 @@ async fn failed_bootstrap_is_retried() {
     let k = TestKitchen::new(env!("CARGO_BIN_EXE_microkitchen"));
     k.write(
         "mise.toml",
-        "[tasks.bootstrap]\nrun = \"test -f /root/allow-bootstrap\"\n\n[_.microkitchen]\ncpus = 1\nmemory = \"1G\"\n",
+        "[tasks.bootstrap]\nrun = \"test -f $HOME/allow-bootstrap\"\n\n[_.microkitchen]\ncpus = 1\nmemory = \"1G\"\n",
     );
     k.track_sandbox();
     let failed = k.run("", &["up", "--no-shell"]);
@@ -74,7 +79,11 @@ async fn failed_bootstrap_is_retried() {
     );
 
     // The sandbox stays up; fix the cause and retry.
-    assert!(k.exec(&["touch", "/root/allow-bootstrap"]).status.success());
+    assert!(
+        k.exec(&["touch", "/home/chef/allow-bootstrap"])
+            .status
+            .success()
+    );
     let retried = k.run("", &["bootstrap"]);
     assert!(retried.status.success(), "{}", stderr(&retried));
     let up = k.up();

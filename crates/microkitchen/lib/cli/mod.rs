@@ -61,10 +61,17 @@ pub struct Cli {
 pub enum Command {
     /// Create or start the sandbox, bootstrap it and attach a shell (the default).
     Up(UpArgs),
-    /// Attach an interactive shell.
-    Shell,
-    /// Run a command in the sandbox.
+    /// Attach an interactive shell (as chef).
+    Shell {
+        /// Run as root instead of chef.
+        #[arg(long)]
+        root: bool,
+    },
+    /// Run a command in the sandbox (as chef).
     Exec {
+        /// Run as root instead of chef.
+        #[arg(long)]
+        root: bool,
         #[arg(
             trailing_var_arg = true,
             allow_hyphen_values = true,
@@ -272,8 +279,8 @@ pub async fn run(cli: Cli) -> Result<ExitCode> {
 
     match cli.command.unwrap_or(Command::Up(UpArgs::default())) {
         Command::Up(args) => lifecycle::up(&ctx, &args).await,
-        Command::Shell => lifecycle::shell(&ctx).await,
-        Command::Exec { command } => lifecycle::exec(&ctx, &command).await,
+        Command::Shell { root } => lifecycle::shell(&ctx, root).await,
+        Command::Exec { root, command } => lifecycle::exec(&ctx, root, &command).await,
         Command::Start => lifecycle::start(&ctx).await,
         Command::Stop => lifecycle::stop(&ctx).await,
         Command::Restart => lifecycle::restart(&ctx).await,
@@ -319,7 +326,7 @@ pub fn export_proxy_secret(cli: &Cli) -> Result<()> {
             Command::Up(_)
                 | Command::Start
                 | Command::Restart
-                | Command::Shell
+                | Command::Shell { .. }
                 | Command::Exec { .. }
                 | Command::Bootstrap
                 | Command::Remodel { .. }

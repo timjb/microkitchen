@@ -23,6 +23,7 @@ dialog backend is implemented but untested.
 - [Quick start](#quick-start)
 - [Commands](#commands)
 - [Configuration](#configuration)
+- [The sandbox user: chef](#the-sandbox-user-chef)
 - [Environment variables and secrets](#environment-variables-and-secrets)
 - [Network access](#network-access)
 - [Changing a sandbox: `remodel`](#changing-a-sandbox-remodel)
@@ -93,7 +94,7 @@ Then run `microkitchen` in the project. It:
    `cruizba/ubuntu-dind:noble-latest`, with Docker running inside,
 4. runs `mise bootstrap` once, with the network open so tools can install,
 5. from then on mediates the sandbox's network access, and
-6. attaches a shell.
+6. attaches a shell as the sandbox user, [chef](#the-sandbox-user-chef).
 
 Run it again to get back into the same sandbox; `microkitchen down` removes it.
 
@@ -102,7 +103,7 @@ Run it again to get back into the same sandbox; `microkitchen down` removes it.
 | Command | What it does |
 |---|---|
 | `microkitchen` / `up [--no-shell] [--recreate]` | Create or start the sandbox, bootstrap it, attach a shell. `--recreate` replaces it (only the mise cache is kept). |
-| `shell`, `exec -- <cmd>` | Attach a shell / run a command in the sandbox. |
+| `shell [--root]`, `exec [--root] -- <cmd>` | Attach a shell / run a command in the sandbox, as chef or, with `--root`, as root. |
 | `stop`, `start`, `restart` | Lifecycle. Use `microkitchen start`, not `msb start` (see [Limitations](#limitations)). |
 | `down [--purge]` | Remove the sandbox; `--purge` also deletes its state and logs (never the shared mise cache). |
 | `status`, `list` | This project's sandbox; all sandboxes microkitchen created. |
@@ -163,6 +164,43 @@ allow = ["github.com", "*.github.com"]       # hosts that receive the real value
 
 The configuration is validated before every create or change, with every
 problem reported at its line. `microkitchen validate` runs the same checks.
+
+## The sandbox user: chef
+
+Shells and commands run as `chef`, not root. Unless the kitchen file declares
+chef itself, the sandbox gets:
+
+```toml
+[bootstrap.users.chef]
+uid = 1001
+group = "chef"
+groups = ["sudo", "docker"]   # passwordless sudo, and Docker
+shell = "/bin/bash"
+comment = "sandbox user"
+
+[bootstrap.groups.chef]
+gid = 1001
+```
+
+The `sudo` group may use sudo without a password. `exec --root` and
+`shell --root` run as root directly.
+
+To change chef, declare `[bootstrap.users.chef]` yourself; it is used as
+written (see mise's [accounts](https://mise.jdx.dev/bootstrap/accounts.html)),
+except that a missing `uid` is 1001 and a missing `group` is `chef` (with gid
+1001). Leave `sudo` out of `groups` and chef has no sudo:
+
+```toml
+[bootstrap.users.chef]
+groups = ["docker"]
+shell = "/bin/sh"
+```
+
+chef's uid and gid are fixed when the sandbox is created: the sandbox runs as
+them before bootstrap has created chef, and files in `mounts` appear owned by
+them, so chef can write there. Changing them needs `remodel --recreate`, and a
+primary group other than `chef` must declare its `gid`. chef cannot be removed
+(`state = "absent"`) or be uid 0.
 
 ## Environment variables and secrets
 
@@ -284,11 +322,12 @@ and asks before applying (`--yes` skips the question):
 | `allow` / `deny` | At once (the broker re-reads the file). |
 | `cpus`, `memory` | At once when the runtime can resize the running VM, otherwise after `microkitchen restart`. |
 | `disk`, environment variables, secrets | After `microkitchen restart` (at the next start for a stopped sandbox). |
-| `mounts`, `ports`, `network` | Need a new sandbox: `microkitchen remodel --recreate` (only the mise cache is kept). |
+| `mounts`, `ports`, `network`, chef's `uid` or `gid` | Need a new sandbox: `microkitchen remodel --recreate` (only the mise cache is kept). |
 
-When tools or `[env]` change, `remodel` also updates the guest's `mise.toml`
-and runs `mise bootstrap` to install new tools; a stopped sandbox is started
-for this and stopped again. It only ever removes environment variables that
+When anything mise uses changes (tools, `[env]`, `[bootstrap]` and so on),
+`remodel` also updates the guest's `mise.toml` and runs `mise bootstrap` to
+apply it; a stopped sandbox is started for this and stopped again. While a
+change to chef's ids waits for `--recreate`, so does the guest's `mise.toml`. It only ever removes environment variables that
 came from the kitchen file, never the image's own.
 
 ## Settings
@@ -337,9 +376,15 @@ in the `microkitchen-mise-cache` volume, shared by all kitchens.
   example `{ required = true }` ones) are read from the host directly.
 - `[tools]` are installed by `mise bootstrap` inside the guest when the
   sandbox is created and again by `microkitchen remodel` after they change.
-- Inside the guest the kitchen file is `/root/kitchen/mise.toml` (without the
-  `[_.microkitchen]` table), linked as mise's global config, so tools work
-  from any directory (mounts included).
+- Inside the guest the kitchen file is `/opt/kitchen/mise.toml` (without the
+  `[_.microkitchen]` table, and with chef added if missing). It is mise's
+  system config, so tools work from any directory (mounts included), and
+  chef's global config (`~/.config/mise/config.toml`) stays chef's own for
+  `mise use -g`.
+- `mise bootstrap` runs in two steps. Root installs mise and sudo and applies
+  the accounts, which creates chef; then chef runs the full bootstrap, so
+  `[tasks.bootstrap]` runs as chef. Tools are installed in `/opt/mise`, owned
+  by chef, and mise's cache is `/var/cache/mise`.
 
 ## Development
 

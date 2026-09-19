@@ -5,9 +5,9 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
-use anyhow::{Result, bail};
+use anyhow::{Context as _, Result, bail};
 use microsandbox::Sandbox;
-use microsandbox::sandbox::SandboxHandle;
+use microsandbox::sandbox::{AttachOptionsBuilder, ExecOptionsBuilder, SandboxHandle};
 use serde::Serialize;
 
 use super::ui::{self, PullProgressDisplay, Spinner};
@@ -16,10 +16,11 @@ use crate::broker::client::BrokerClient;
 use crate::broker::protocol::Mode;
 use crate::config::Project;
 use crate::config::discover::{Discovery, discover};
+use crate::config::schema::CHEF;
 use crate::config::schema::NetworkPreset;
 use crate::mise::render::render_guest_config;
 use crate::sandbox::bootstrap;
-use crate::sandbox::build::IMAGE;
+use crate::sandbox::build::{IMAGE, ROOT};
 use crate::sandbox::labels;
 use crate::sandbox::lifecycle::{self, is_active, label, status_name};
 use crate::sandbox::naming::sandbox_name;
@@ -40,6 +41,14 @@ const DOCKER_READY_TIMEOUT: Duration = Duration::from_secs(90);
 // Types
 //--------------------------------------------------------------------------------------------------
 
+/// Who `shell` and `exec` run as. chef's home and shell come from the guest,
+/// since `[bootstrap.users.chef]` may change them.
+struct Session {
+    user: &'static str,
+    home: String,
+    shell: String,
+}
+
 #[derive(Serialize)]
 struct StatusReport {
     name: String,
@@ -55,6 +64,48 @@ struct ListEntry {
     name: String,
     status: String,
     kitchen_file: Option<String>,
+}
+
+//--------------------------------------------------------------------------------------------------
+// Methods
+//--------------------------------------------------------------------------------------------------
+
+impl Session {
+    async fn lookup(sandbox: &Sandbox, root: bool) -> Result<Self> {
+        let user = if root { ROOT } else { CHEF };
+        let output = sandbox
+            .exec_with("getent", |e| e.args(["passwd", user]).user(ROOT))
+            .await
+            .context("looking up the sandbox user")?;
+        let entry = output.stdout().unwrap_or_default();
+        let fields: Vec<&str> = entry.trim().split(':').collect();
+        if !output.status().success || fields.len() < 7 {
+            bail!("the sandbox has no {user} user yet; run `microkitchen bootstrap`");
+        }
+        Ok(Self {
+            user,
+            home: fields[5].to_owned(),
+            shell: fields[6].to_owned(),
+        })
+    }
+
+    fn attach(&self, options: AttachOptionsBuilder) -> AttachOptionsBuilder {
+        options
+            .user(self.user)
+            .cwd(&self.home)
+            .env("HOME", &self.home)
+            .env("USER", self.user)
+            .env("LOGNAME", self.user)
+    }
+
+    fn exec(&self, options: ExecOptionsBuilder) -> ExecOptionsBuilder {
+        options
+            .user(self.user)
+            .cwd(&self.home)
+            .env("HOME", &self.home)
+            .env("USER", self.user)
+            .env("LOGNAME", self.user)
+    }
 }
 
 //--------------------------------------------------------------------------------------------------
@@ -105,24 +156,38 @@ pub(super) async fn up(ctx: &Context, args: &UpArgs) -> Result<ExitCode> {
         say(ctx, format!("{} is ready", plan.name));
         return Ok(ExitCode::SUCCESS);
     }
-    Ok(exit_code(sandbox.attach_shell().await?))
+    attach_shell(&sandbox, false).await
 }
 
-pub(super) async fn shell(ctx: &Context) -> Result<ExitCode> {
+pub(super) async fn shell(ctx: &Context, root: bool) -> Result<ExitCode> {
     let sandbox = start_mediated(ctx, &require(ctx).await?).await?;
-    Ok(exit_code(sandbox.attach_shell().await?))
+    attach_shell(&sandbox, root).await
 }
 
-pub(super) async fn exec(ctx: &Context, command: &[String]) -> Result<ExitCode> {
+async fn attach_shell(sandbox: &Sandbox, root: bool) -> Result<ExitCode> {
+    let session = Session::lookup(sandbox, root).await?;
+    let code = sandbox
+        .attach_with(&session.shell, |a| session.attach(a))
+        .await?;
+    Ok(exit_code(code))
+}
+
+pub(super) async fn exec(ctx: &Context, root: bool, command: &[String]) -> Result<ExitCode> {
     let (program, args) = command.split_first().expect("clap requires a command");
     let sandbox = start_mediated(ctx, &require(ctx).await?).await?;
+    let session = Session::lookup(&sandbox, root).await?;
 
     if std::io::stdin().is_terminal() && std::io::stdout().is_terminal() {
-        return Ok(exit_code(sandbox.attach(program, args).await?));
+        let code = sandbox
+            .attach_with(program, |a| session.attach(a.args(args)))
+            .await?;
+        return Ok(exit_code(code));
     }
     // The output is the result: the spinner leaves no line behind.
     let spinner = Spinner::new(ctx.quiet, "Running", &command.join(" "));
-    let output = sandbox.exec(program, args).await;
+    let output = sandbox
+        .exec_with(program, |e| session.exec(e.args(args)))
+        .await;
     spinner.finish_clear();
     let output = output?;
     std::io::stdout().write_all(output.stdout_bytes())?;
@@ -278,8 +343,8 @@ pub(super) async fn run_bootstrap(ctx: &Context, sandbox: &Sandbox, name: &str) 
 
     // Setup installs from wherever it needs to; the broker mediates only afterwards.
     set_broker_mode(ctx, name, Mode::Open).await;
-    let script = bootstrap::script(settings.mise_version.as_deref());
-    let result = bootstrap::run(sandbox, &script, &log, !ctx.quiet).await;
+    let steps = bootstrap::steps(settings.mise_version.as_deref());
+    let result = bootstrap::run(sandbox, &steps, &log, !ctx.quiet).await;
     let succeeded = result.is_ok();
     set_broker_mode(ctx, name, Mode::Enforce).await;
 

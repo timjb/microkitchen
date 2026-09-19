@@ -7,7 +7,7 @@ use anyhow::{Context, Result, bail};
 use microsandbox::Sandbox;
 use microsandbox::sandbox::{PullProgress, SandboxHandle, SandboxStatus};
 
-use super::build::{self, GUEST_KITCHEN_DIR, GUEST_MISE_GLOBAL_CONFIG};
+use super::build::{self, GUEST_KITCHEN_DIR, GUEST_MISE_SYSTEM_CONFIG, ROOT};
 use super::labels;
 use super::plan::SandboxPlan;
 
@@ -131,16 +131,13 @@ pub async fn remove(handle: &SandboxHandle) -> Result<()> {
         .with_context(|| format!("removing sandbox {}", handle.name()))
 }
 
-/// Write `/root/kitchen/mise.toml` in the guest and make it mise's global config.
+/// Write mise's system config in the guest: the guest copy of the kitchen file.
 pub async fn write_guest_config(sandbox: &Sandbox, contents: &str) -> Result<()> {
-    let script = format!(
-        "mkdir -p {GUEST_KITCHEN_DIR} \"$(dirname {GUEST_MISE_GLOBAL_CONFIG})\" \
-         && cat > {GUEST_KITCHEN_DIR}/mise.toml \
-         && ln -sfn {GUEST_KITCHEN_DIR}/mise.toml {GUEST_MISE_GLOBAL_CONFIG}"
-    );
+    let script = format!("mkdir -p {GUEST_KITCHEN_DIR} && cat > {GUEST_MISE_SYSTEM_CONFIG}");
     let output = sandbox
         .exec_with("sh", |e| {
             e.args(["-c", script.as_str()])
+                .user(ROOT)
                 .stdin_bytes(contents.as_bytes().to_vec())
         })
         .await
@@ -160,15 +157,16 @@ pub async fn wait_for_docker(sandbox: &Sandbox, timeout: Duration) -> Result<()>
     let wait =
         format!("timeout {seconds} sh -c 'until docker info >/dev/null 2>&1; do sleep 1; done'");
     let output = sandbox
-        .shell(wait)
+        .shell_with(wait, |e| e.user(ROOT))
         .await
         .context("waiting for Docker in the sandbox")?;
     if output.status().success {
         return Ok(());
     }
     let log = sandbox
-        .shell(
+        .shell_with(
             "{ journalctl -u docker -n 40 --no-pager || tail -n 40 /var/log/dockerd.err.log; } 2>&1",
+            |e| e.user(ROOT),
         )
         .await
         .ok()

@@ -26,7 +26,7 @@ async fn docker_runs_inside_the_sandbox() {
     let hello = k.exec(&["docker", "run", "--rm", "hello-world"]);
     assert!(stdout(&hello).contains("Hello from Docker!"), "{hello:?}");
 
-    let config = k.exec(&["cat", "/root/kitchen/mise.toml"]);
+    let config = k.exec(&["cat", "/opt/kitchen/mise.toml"]);
     let expected = microkitchen::mise::render::render_guest_config(&k.read("mise.toml")).unwrap();
     assert_eq!(stdout(&config), expected);
 }
