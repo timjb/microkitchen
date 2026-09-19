@@ -106,7 +106,7 @@ Run it again to get back into the same sandbox; `microkitchen down` removes it.
 | `shell [--root]`, `exec [--root] -- <cmd>` | Attach a shell / run a command in the sandbox, as chef or, with `--root`, as root. |
 | `stop`, `start`, `restart` | Lifecycle. Use `microkitchen start`, not `msb start` (see [Limitations](#limitations)). |
 | `down [--purge]` | Remove the sandbox; `--purge` also deletes its state and logs (never the shared mise cache). |
-| `status`, `list` | This project's sandbox; all sandboxes microkitchen created. |
+| `status`, `list` (`ls`) | This project's sandbox; all sandboxes microkitchen created. |
 | `logs [--bootstrap \| --broker \| --sandbox]` | The bootstrap log (default), the broker's log, or the sandbox's own output. |
 | `bootstrap` | Run `mise bootstrap` again, e.g. after a failed install (`remodel` runs it after tool changes). |
 | `validate` | Check the configuration and resolve the environment without creating anything. |

@@ -95,6 +95,7 @@ pub enum Command {
     /// Show the sandbox and broker state.
     Status,
     /// List sandboxes created by microkitchen.
+    #[command(visible_alias = "ls")]
     List,
     /// Show logs.
     Logs {
