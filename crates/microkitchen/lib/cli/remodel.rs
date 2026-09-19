@@ -21,7 +21,7 @@ use super::{Context, UpArgs, lifecycle as commands, print_diagnostics};
 use crate::config::Project;
 use crate::config::hostpat::HostPattern;
 use crate::mise::render::render_guest_config;
-use crate::sandbox::build::GUEST_PATH;
+use crate::sandbox::build::GUEST_ENV;
 use crate::sandbox::labels;
 use crate::sandbox::lifecycle::{self, is_active};
 use crate::sandbox::plan::{SandboxPlan, config_hash};
@@ -353,9 +353,11 @@ fn sdk_changes(
         .map(|e| (e.key.clone(), e.value.clone()))
         .collect();
     let mut desired_env = plan.env.clone();
-    desired_env
-        .entry("PATH".to_owned())
-        .or_insert_with(|| GUEST_PATH.to_owned());
+    for (name, value) in GUEST_ENV {
+        desired_env
+            .entry((*name).to_owned())
+            .or_insert_with(|| (*value).to_owned());
+    }
     sdk.env = remodel::env_patch(&current_env, &desired_env, &state.env_keys);
 
     let stored: BTreeMap<String, String> = config

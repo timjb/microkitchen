@@ -77,6 +77,10 @@ allow = ["api.figma.com"]
         !k.exec(&["printenv", "OPT"]).status.success(),
         "empty optional variables are not forwarded"
     );
+    // Temporary files outgrow the 512 MiB `/tmp` tmpfs.
+    assert_eq!(stdout(&k.exec(&["printenv", "TMPDIR"])).trim(), "/var/tmp");
+    let big_temp = k.exec(&["sh", "-c", "fallocate -l 768M \"$(mktemp)\""]);
+    assert!(big_temp.status.success(), "{big_temp:?}");
 
     let placeholder = stdout(&k.exec(&["printenv", "TOKEN"])).trim().to_owned();
     assert!(!placeholder.is_empty());

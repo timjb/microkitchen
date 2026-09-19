@@ -41,6 +41,14 @@ pub const GUEST_MISE_GLOBAL_CONFIG: &str = "/root/.config/mise/config.toml";
 pub const GUEST_PATH: &str = "/root/.local/share/mise/shims:/root/.local/bin:/.msb/scripts:\
 /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 
+/// Guest `TMPDIR`: microsandbox mounts `/tmp` as a tmpfs capped at 512 MiB,
+/// too small for some tool installs; `/var/tmp` is on the root disk.
+pub const GUEST_TMPDIR: &str = "/var/tmp";
+
+/// Variables microkitchen sets in every guest; the kitchen file's `env` may
+/// override them.
+pub const GUEST_ENV: &[(&str, &str)] = &[("PATH", GUEST_PATH), ("TMPDIR", GUEST_TMPDIR)];
+
 /// Published ports listen on host loopback only.
 const PORT_BIND: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST);
 
@@ -65,12 +73,18 @@ pub fn builder(plan: &SandboxPlan) -> SandboxBuilder {
         .hostname(&plan.name)
         .shell("/bin/bash")
         .init(GUEST_INIT)
-        .env("PATH", GUEST_PATH)
         // The broker's process attribution helper (design §8).
         .script(attribution::SCRIPT_NAME, attribution::SCRIPT)
         .volume(MISE_CACHE_GUEST_PATH, |mount| {
             mount.named_with(MISE_CACHE_VOLUME, |volume| volume.ensure_exists())
         });
+
+    // The SDK appends rather than replaces, so skip what `plan.env` overrides.
+    for (name, value) in GUEST_ENV {
+        if !plan.env.contains_key(*name) {
+            builder = builder.env(*name, *value);
+        }
+    }
 
     for (key, value) in plan.labels() {
         builder = builder.label(key, value);
