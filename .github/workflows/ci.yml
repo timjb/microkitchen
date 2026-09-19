@@ -22,6 +22,9 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      # microsandbox's krun-based VMM backend links against libcap-ng.
+      - name: Install build deps
+        run: sudo apt-get update && sudo apt-get install -y libcap-ng-dev
       # The VM-free tests run mise (config discovery, environment resolution).
       - uses: jdx/mise-action@v2
       - run: cargo fmt --all --check
@@ -44,6 +47,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - uses: jdx/mise-action@v2
+      # Self-hosted runners may already have it (or lack passwordless sudo).
+      - name: Install build deps
+        run: |
+          dpkg -s libcap-ng-dev >/dev/null 2>&1 ||
+            { sudo apt-get update && sudo apt-get install -y libcap-ng-dev; }
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest,just
