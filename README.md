@@ -35,7 +35,7 @@ dialog backend is implemented but untested.
 ## Requirements
 
 - Linux on x86_64 with KVM (`/dev/kvm`), or macOS on Apple Silicon (untested).
-- [microsandbox](https://microsandbox.dev) **0.6.18** (the `msb` CLI and its
+- [microsandbox](https://microsandbox.dev) **0.7.2** (the `msb` CLI and its
   runtime; the version must match the SDK microkitchen is built with).
 - [mise](https://mise.jdx.dev) on `PATH`, used to discover the configuration and
   resolve environment variables on the host.
@@ -52,8 +52,8 @@ dialog backend is implemented but untested.
 ```sh
 # microsandbox, pinned to the version microkitchen is built against
 curl -fsSL -o install.sh \
-  https://github.com/superradcompany/microsandbox/releases/download/v0.6.18/install.sh
-sed -i 's/^    get_latest_version$/    VERSION=v0.6.18/' install.sh && sh install.sh
+  https://github.com/superradcompany/microsandbox/releases/download/v0.7.2/install.sh
+sed -i 's/^    get_latest_version$/    VERSION=v0.7.2/' install.sh && sh install.sh
 
 # microkitchen
 cargo install --locked --path crates/microkitchen   # or: just install

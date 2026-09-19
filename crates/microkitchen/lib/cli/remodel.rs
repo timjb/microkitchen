@@ -92,12 +92,12 @@ impl SdkChanges {
                         builder = builder.cpus(cpus);
                     }
                     if let Some(mib) = self.memory_mib {
-                        builder = builder.memory_mib(mib);
+                        builder = builder.memory(mib);
                     }
                 }
                 Group::Disk => {
                     if let Some(mib) = self.disk_mib {
-                        builder = builder.root_disk_size_mib(mib);
+                        builder = builder.root_disk_size(mib);
                     }
                 }
                 Group::Env => {
@@ -117,7 +117,7 @@ impl SdkChanges {
                                 spec = spec.value(value);
                             }
                             for host in update.hosts {
-                                spec = spec.allow_host(host);
+                                spec = spec.allow(host);
                             }
                             spec
                         });

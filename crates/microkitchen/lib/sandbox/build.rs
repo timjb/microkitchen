@@ -192,10 +192,10 @@ fn secret_entry(
     let mut builder = builder.env(name).value(value);
     for pattern in &secret.allow {
         builder = match pattern {
-            HostPattern::Exact(host) => builder.allow_host(host),
-            HostPattern::Suffix(_) => builder.allow_host_pattern(pattern.to_string()),
+            HostPattern::Exact(host) => builder.allow(host),
+            HostPattern::Suffix(_) => builder.allow(pattern.to_string()),
             HostPattern::Address(_) | HostPattern::Network(_) => builder,
         };
     }
-    builder.on_violation(|v| v.passthrough_all_hosts(true))
+    builder.allow_passthrough_for("*")
 }
