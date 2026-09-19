@@ -33,11 +33,12 @@ jobs:
 
   integration:
     name: VM integration tests
-    # Boots microVMs: needs /dev/kvm, so it runs on a self-hosted runner
-    # labelled `kvm`, only on demand and for main.
+    # Boots microVMs, so it needs /dev/kvm. GitHub's standard Linux runners
+    # expose it, though nested virtualization is not officially supported.
+    # Runs only on demand and for main.
     if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     needs: check
-    runs-on: [self-hosted, linux, x64, kvm]
+    runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
       # Must match the `microsandbox = "=…"` dependency.
@@ -47,11 +48,21 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - uses: jdx/mise-action@v2
-      # Self-hosted runners may already have it (or lack passwordless sudo).
       - name: Install build deps
+        run: sudo apt-get update && sudo apt-get install -y libcap-ng-dev
+      # /dev/kvm exists but is only accessible to root and the kvm group.
+      - name: Enable KVM
         run: |
-          dpkg -s libcap-ng-dev >/dev/null 2>&1 ||
-            { sudo apt-get update && sudo apt-get install -y libcap-ng-dev; }
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' |
+            sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          sudo udevadm settle
+          ls -l /dev/kvm
+          test -r /dev/kvm && test -w /dev/kvm || {
+            echo "/dev/kvm is not usable on this runner" >&2
+            exit 1
+          }
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest,just
