@@ -37,6 +37,17 @@ pub struct SandboxState {
     #[serde(default)]
     pub guest_config_pending: bool,
 
+    /// Digest of the staged files as last applied, so `remodel` notices a
+    /// dotfile whose contents changed without the kitchen file changing.
+    /// Empty for sandboxes created before staging existed.
+    #[serde(default)]
+    pub staged_digest: String,
+
+    /// Guest paths the last stage created, so the next one can remove what the
+    /// kitchen file no longer references.
+    #[serde(default)]
+    pub staged_paths: Vec<String>,
+
     #[serde(default)]
     pub bootstrapped: bool,
 
@@ -116,6 +127,8 @@ mod tests {
             applied_text: Some("[tools]\n".into()),
             env_keys: vec!["GREETING".into()],
             guest_config_pending: false,
+            staged_digest: "abcd1234".into(),
+            staged_paths: vec!["/opt/kitchen/files/project/dots".into()],
             bootstrapped: false,
             resolver_port: None,
             proxy_port: None,
@@ -126,5 +139,30 @@ mod tests {
         SandboxState::purge(&home, "mk-a").unwrap();
         assert_eq!(SandboxState::load(&home, "mk-a").unwrap(), None);
         SandboxState::purge(&home, "mk-a").unwrap();
+    }
+
+    /// A sandbox created before staging existed must still load.
+    #[test]
+    fn state_without_the_staging_fields_loads() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = Home::at(dir.path());
+        let json = r#"{
+            "name": "mk-a",
+            "kitchen_file": "/p/mise.toml",
+            "config_hash": "abc",
+            "applied": {
+                "cpus": 2, "memory_mib": 4096, "disk_mib": 10240,
+                "mounts": [], "secrets": {},
+                "network": { "preset": "public", "allow": [], "deny": [], "ports": [] }
+            }
+        }"#;
+        let path = SandboxState::path(&home, "mk-a");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, json).unwrap();
+
+        let state = SandboxState::load(&home, "mk-a").unwrap().expect("loads");
+        assert_eq!(state.staged_digest, "");
+        assert!(state.staged_paths.is_empty());
+        assert_eq!(state.applied.dotfiles, None);
     }
 }

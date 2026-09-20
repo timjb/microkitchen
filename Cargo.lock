@@ -2855,6 +2855,7 @@ dependencies = [
  "anyhow",
  "clap",
  "getrandom 0.4.3",
+ "glob",
  "hex",
  "hickory-proto",
  "indicatif",
@@ -2867,6 +2868,7 @@ dependencies = [
  "serde_json",
  "sha2 0.11.0",
  "subtle",
+ "tar",
  "tempfile",
  "test-macros",
  "test-utils",
@@ -2877,6 +2879,7 @@ dependencies = [
  "toml_edit",
  "tracing",
  "tracing-subscriber",
+ "walkdir",
 ]
 
 [[package]]

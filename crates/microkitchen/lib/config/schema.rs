@@ -43,7 +43,9 @@ pub const CHEF: &str = "chef";
 /// image's own `ubuntu` user holds 1000.
 pub const DEFAULT_CHEF_ID: u32 = 1001;
 
-const SECTION_KEYS: &[&str] = &["cpus", "memory", "disk", "mounts", "network", "secrets"];
+const SECTION_KEYS: &[&str] = &[
+    "cpus", "memory", "disk", "mounts", "network", "secrets", "dotfiles",
+];
 
 const NETWORK_KEYS: &[&str] = &["network", "allow", "deny", "ports"];
 
@@ -65,6 +67,15 @@ pub struct KitchenConfig {
     /// chef, which run as root.
     #[serde(default = "GuestUser::root")]
     pub user: GuestUser,
+
+    /// Host directory staged into the guest as mise's `dotfiles.root`, so
+    /// entries without a `source` resolve (see [`crate::config::staging`]).
+    ///
+    /// `skip_serializing_if` keeps [`crate::sandbox::plan::config_hash`]
+    /// byte-identical for kitchens that do not use it, so no existing
+    /// sandbox's `config-hash` label goes stale.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dotfiles: Option<PathBuf>,
 }
 
 /// Numeric identity of the sandbox's default user. microsandbox resolves it
@@ -142,6 +153,8 @@ pub struct Spans {
     pub mounts: Vec<Option<Range<usize>>>,
     /// Span of each secret's key.
     pub secrets: BTreeMap<String, Option<Range<usize>>>,
+    /// Span of the `dotfiles` value, when set.
+    pub dotfiles: Option<Range<usize>>,
 }
 
 struct Walker<'a> {
@@ -263,18 +276,29 @@ pub fn parse_mount(spec: &str, base: &Path) -> Result<Mount, String> {
         return Err("cannot mount over the guest's root directory".into());
     }
 
-    let host = expand_home(host)?;
-    let host = if host.is_absolute() {
-        host
-    } else {
-        base.join(host)
-    };
-
     Ok(Mount {
-        host: normalize_lexically(&host),
+        host: resolve_host_path(host, base)?,
         guest: guest.to_string_lossy().into_owned(),
         readonly,
     })
+}
+
+/// A host path as written in the kitchen file: `~/` expands, a relative path
+/// resolves against `base`, and the result is normalized lexically.
+///
+/// `base` is the directory of the file that declared the path. For staged
+/// sources that is the kitchen *file's* directory, not
+/// [`crate::config::discover::project_dir`]'s result: mise resolves a relative
+/// `source` against the declaring file's directory (see
+/// [`crate::config::staging`]).
+pub fn resolve_host_path(path: &str, base: &Path) -> Result<PathBuf, String> {
+    let path = expand_home(path)?;
+    let path = if path.is_absolute() {
+        path
+    } else {
+        base.join(path)
+    };
+    Ok(normalize_lexically(&path))
 }
 
 /// Parse `host:guest[/tcp|/udp]`.
@@ -617,6 +641,16 @@ impl Walker<'_> {
                 self.secrets(secrets, &key, config, spans);
             }
         }
+        if let Some(item) = section.get("dotfiles") {
+            let key = format!("{path}.dotfiles");
+            spans.dotfiles = item.span();
+            if let Some(text) = self.string(item, &key) {
+                match resolve_host_path(text, self.dir) {
+                    Ok(path) => config.dotfiles = Some(path),
+                    Err(message) => self.error(item.span(), &key, message),
+                }
+            }
+        }
     }
 
     fn mounts(&mut self, item: &Item, key: &str, config: &mut KitchenConfig, spans: &mut Spans) {
@@ -813,6 +847,7 @@ impl Default for KitchenConfig {
             network: NetworkConfig::default(),
             secrets: BTreeMap::new(),
             user: GuestUser::default(),
+            dotfiles: None,
         }
     }
 }
@@ -987,6 +1022,7 @@ cpus = 65
 memory = "65G"
 disk = "10T"
 color = "blue"
+dotfiles = 5
 mounts = ["relative", "./a:/opt/kitchen/x", "./b:/app", "./c:/app", 5]
 
 [_.microkitchen.network]
@@ -1012,6 +1048,7 @@ allow = ["x.com"]
             ":3:10: _.microkitchen.memory: must be at most 64G",
             ":4:8: _.microkitchen.disk: unknown unit",
             ":5:1: _.microkitchen.color: unknown key `color`",
+            ":6:12: _.microkitchen.dotfiles: expected a string, found integer",
             "_.microkitchen.mounts[0]: expected `host:guest[:ro]`",
             "_.microkitchen.mounts[1]: guest path `/opt/kitchen/x` overlaps `/opt/kitchen`",
             "_.microkitchen.mounts[3]: guest path `/app` is mounted more than once",

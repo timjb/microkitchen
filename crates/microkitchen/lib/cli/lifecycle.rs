@@ -26,6 +26,7 @@ use crate::sandbox::lifecycle::{self, is_active, label, status_name};
 use crate::sandbox::naming::sandbox_name;
 use crate::sandbox::plan::Egress;
 use crate::sandbox::plan::SandboxPlan;
+use crate::sandbox::staging;
 use crate::state::sandbox::SandboxState;
 use crate::state::secret;
 use crate::state::settings::Settings;
@@ -328,8 +329,56 @@ pub(super) async fn bootstrap(ctx: &Context) -> Result<ExitCode> {
     let booted = !is_active(handle.status_snapshot());
     let sandbox = start_mediated(ctx, &handle).await?;
     wait_for_docker(ctx, &sandbox, booted).await?;
+    restage(ctx, &sandbox, handle.name()).await?;
     run_bootstrap(ctx, &sandbox, handle.name()).await?;
     Ok(ExitCode::SUCCESS)
+}
+
+/// Copy the staged files in again, so editing a dotfile and re-running
+/// `microkitchen bootstrap` applies it.
+///
+/// This command exists to retry a failed bootstrap, so a kitchen file that no
+/// longer validates is reported and skipped rather than treated as fatal.
+async fn restage(ctx: &Context, sandbox: &Sandbox, name: &str) -> Result<()> {
+    let project = Project::load(&ctx.mise, &ctx.cwd)?;
+    if project.diagnostics.has_errors() {
+        print_diagnostics(&project.diagnostics);
+        say(
+            ctx,
+            "the configuration has errors; staged files are unchanged",
+        );
+        return Ok(());
+    }
+    let plan = SandboxPlan::from_project(&project)?;
+    let mut state = SandboxState::load(&ctx.home, name)?;
+    let stale: Vec<String> = state
+        .as_ref()
+        .map(|state| {
+            state
+                .staged_paths
+                .iter()
+                .filter(|path| !plan.stage.roots.contains(path))
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default();
+
+    if plan.stage.is_empty() && stale.is_empty() {
+        return Ok(());
+    }
+    Spinner::new(ctx.quiet, "Staging", &format!("{} files", plan.stage.files))
+        .run(
+            "Staged",
+            staging::apply(sandbox, &plan.stage, plan.config.user, &stale),
+        )
+        .await?;
+
+    if let Some(state) = &mut state {
+        state.staged_digest = plan.stage.digest.clone();
+        state.staged_paths = plan.stage.roots.clone();
+        state.save(&ctx.home)?;
+    }
+    Ok(())
 }
 
 /// Run `mise bootstrap` and record the result in `state.json` and the label.
@@ -377,6 +426,8 @@ async fn create(ctx: &Context, plan: &SandboxPlan) -> Result<Sandbox> {
         applied_text: Some(plan.kitchen_text.clone()),
         env_keys: plan.env.keys().cloned().collect(),
         guest_config_pending: false,
+        staged_digest: plan.stage.digest.clone(),
+        staged_paths: plan.stage.roots.clone(),
         bootstrapped: false,
         resolver_port: plan.egress.as_ref().map(|e| e.resolver_port),
         proxy_port: plan.egress.as_ref().map(|e| e.proxy_port),

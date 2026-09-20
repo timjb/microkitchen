@@ -5,6 +5,7 @@ pub mod edit;
 pub mod hostpat;
 pub mod schema;
 pub mod size;
+pub mod staging;
 pub mod validate;
 
 use std::fmt;
@@ -21,6 +22,7 @@ use crate::mise::env::{self, ResolvedEnv};
 
 use self::discover::Discovery;
 use self::schema::ParsedKitchen;
+use self::staging::StagePlan;
 
 //--------------------------------------------------------------------------------------------------
 // Types
@@ -82,6 +84,10 @@ pub struct Project {
 
     /// `None` when the kitchen file is not valid TOML.
     pub kitchen: Option<ParsedKitchen>,
+
+    /// Host files the kitchen file's mise entries reference, and the guest
+    /// paths they are rewritten to.
+    pub staging: StagePlan,
 
     pub declarations: EnvDeclarations,
 
@@ -222,6 +228,21 @@ impl Project {
         let kitchen = schema::parse(&source, &discovery.kitchen_dir, &mut diagnostics);
         let declarations = EnvDeclarations::collect(&discovery.loaded_files)?;
 
+        // mise resolves a relative `source` against the directory holding the
+        // declaring file, which is not `kitchen_dir` for a `.config/mise`
+        // layout (see `config::staging`). `kitchen_dir` still decides which
+        // sources count as project-local.
+        let staging = staging::plan(
+            &source,
+            discovery
+                .kitchen_file
+                .parent()
+                .unwrap_or(&discovery.kitchen_dir),
+            &discovery.kitchen_dir,
+            kitchen.as_ref().and_then(|k| k.config.dotfiles.as_deref()),
+            &mut diagnostics,
+        );
+
         // Resolve where discovery ran: the loaded files, and so the
         // declarations, depend on the directory mise starts in.
         let env = match mise.env(cwd)? {
@@ -246,10 +267,12 @@ impl Project {
                 &mut diagnostics,
             );
         }
+        validate::check_staging(&staging, &source, &mut diagnostics);
 
         Ok(Self {
             discovery,
             kitchen,
+            staging,
             declarations,
             env,
             diagnostics,

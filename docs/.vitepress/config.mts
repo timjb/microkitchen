@@ -37,6 +37,7 @@ export default defineConfig({
           { text: "Configuration", link: "/guide/configuration" },
           { text: "The sandbox user: chef", link: "/guide/chef" },
           { text: "Environment and secrets", link: "/guide/env-and-secrets" },
+          { text: "Dotfiles and system files", link: "/guide/dotfiles" },
           { text: "Network access", link: "/guide/network" },
           { text: "Changing a sandbox", link: "/guide/remodel" },
           { text: "mise caveats", link: "/guide/mise-caveats" },

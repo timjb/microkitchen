@@ -10,6 +10,7 @@ use microsandbox::sandbox::{PullProgress, SandboxHandle, SandboxStatus};
 use super::build::{self, GUEST_KITCHEN_DIR, GUEST_MISE_SYSTEM_CONFIG, ROOT};
 use super::labels;
 use super::plan::SandboxPlan;
+use super::staging;
 
 //--------------------------------------------------------------------------------------------------
 // Constants
@@ -96,6 +97,8 @@ pub async fn create(
         .context("the sandbox creation task failed")?
         .with_context(creating)?;
     write_guest_config(&sandbox, &plan.guest_config).await?;
+    // Before the caller's `mise bootstrap`: entries reference these files.
+    staging::apply(&sandbox, &plan.stage, plan.config.user, &[]).await?;
     Ok(sandbox)
 }
 

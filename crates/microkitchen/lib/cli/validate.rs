@@ -10,6 +10,7 @@ use serde::Serialize;
 use super::{Context, print_diagnostics};
 use crate::config::schema::KitchenConfig;
 use crate::config::size::format_mib;
+use crate::config::staging::GUEST_FILES_DIR;
 use crate::config::{Diagnostics, Project, SectionLocation};
 use crate::sandbox::naming::sandbox_name;
 
@@ -32,7 +33,22 @@ struct Report<'a> {
     secrets: Vec<&'a str>,
     /// Declared secrets that resolve to nothing and are left out.
     skipped_secrets: Vec<&'a str>,
+    /// Host files copied into the sandbox, and where they land.
+    staged: Vec<StagedEntry<'a>>,
     diagnostics: &'a Diagnostics,
+}
+
+/// One row of the staging manifest.
+#[derive(Serialize)]
+struct StagedEntry<'a> {
+    /// The entry that referenced it: `dotfiles."~/.gitconfig"`.
+    key: &'a str,
+    host: &'a Path,
+    guest: &'a str,
+    /// The host path is not under the kitchen file's directory.
+    outside: bool,
+    /// Staged as mise's `dotfiles.root`, not by a `source`.
+    dotfiles_root: bool,
 }
 
 //--------------------------------------------------------------------------------------------------
@@ -67,6 +83,19 @@ impl<'a> Report<'a> {
             }
         }
 
+        let staged = project
+            .staging
+            .sources
+            .iter()
+            .map(|s| StagedEntry {
+                key: &s.key,
+                host: &s.host,
+                guest: &s.guest,
+                outside: s.outside,
+                dotfiles_root: s.dotfiles_root,
+            })
+            .collect();
+
         Self {
             valid: !project.diagnostics.has_errors(),
             kitchen_file: &discovery.kitchen_file,
@@ -78,6 +107,7 @@ impl<'a> Report<'a> {
             env,
             secrets,
             skipped_secrets,
+            staged,
             diagnostics: &project.diagnostics,
         }
     }
@@ -131,6 +161,31 @@ impl<'a> Report<'a> {
         }
         if !self.skipped_secrets.is_empty() {
             row("skipped", &self.skipped_secrets.join(", "));
+        }
+        for entry in &self.staged {
+            // Guest paths all share one prefix; showing it once keeps the
+            // rows readable.
+            let guest = entry
+                .guest
+                .strip_prefix(&format!("{GUEST_FILES_DIR}/"))
+                .unwrap_or(entry.guest);
+            let mut note = String::new();
+            if entry.dotfiles_root {
+                note.push_str("  (dotfiles root)");
+            }
+            if entry.outside {
+                note.push_str("  (outside the project)");
+            }
+            row(
+                "stage",
+                &format!("{} → {guest}{note}", entry.host.display()),
+            );
+        }
+        if !self.staged.is_empty() {
+            row(
+                "",
+                &format!("staged under {GUEST_FILES_DIR} in the sandbox"),
+            );
         }
     }
 }

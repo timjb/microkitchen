@@ -25,6 +25,7 @@ dialog backend is implemented but untested.
 - [Configuration](#configuration)
 - [The sandbox user: chef](#the-sandbox-user-chef)
 - [Environment variables and secrets](#environment-variables-and-secrets)
+- [Dotfiles and system files](#dotfiles-and-system-files)
 - [Network access](#network-access)
 - [Changing a sandbox: `remodel`](#changing-a-sandbox-remodel)
 - [Settings](#settings)
@@ -136,6 +137,7 @@ cpus   = 2                  # 1–64                                   default 2
 memory = "4G"               # up to 64G                              default "4G"
 disk   = "10G"              # root disk (flat ext4)                  default "10G"
 mounts = ["./src:/app", "./data:/data:ro"]   # host:guest[:ro]
+dotfiles = "~/.dotfiles"    # staged as mise's dotfiles.root       default none
 
 [_.microkitchen.network]
 network = "public"          # none | public | open                   default "public"
@@ -151,7 +153,11 @@ allow = ["github.com", "*.github.com"]       # hosts that receive the real value
   MiB.
 - **Mounts**: the host path is relative to the kitchen file's directory and
   must exist. Guest paths must be absolute, unique, and must not overlap
-  `/root/.cache/mise`, `/root/kitchen` or `/.msb`.
+  `/var/cache/mise`, `/opt/kitchen`, `/opt/mise` or `/.msb`, which microkitchen
+  manages.
+- **`dotfiles`**: a host directory staged into the sandbox as mise's
+  `dotfiles.root` (see [Dotfiles and system
+  files](#dotfiles-and-system-files)).
 - **Ports** are published on the host's `127.0.0.1` only.
 - **`network`** is microsandbox's preset: `none` disables networking, `public`
   blocks private ranges, loopback, link-local and cloud metadata, `open` allows
@@ -218,6 +224,68 @@ Every secret table needs a matching `[env]` declaration. Variables that resolve
 to an empty string are not injected; a secret declared for one is skipped with a
 notice. The guest's copy of `mise.toml` drops `_.file`, `_.source` and `_.path`,
 so `.env` files never enter the sandbox.
+
+A [templated dotfile](#dotfiles-and-system-files) that interpolates a secret
+gets the placeholder, not the value. Substitution is a literal match on the
+bytes sent, so it works where the value travels verbatim (`Authorization:
+Bearer <token>`) and not where it is transformed (a `~/.netrc` that curl sends
+as `Authorization: Basic base64(user:token)`). Staging a real credential file
+as a plain dotfile copies it into the sandbox in clear text.
+
+## Dotfiles and system files
+
+mise's [dotfiles](https://mise.jdx.dev/dotfiles.html) (`[dotfiles]`) and
+[system files](https://mise.jdx.dev/bootstrap/files.html)
+(`[bootstrap.files]`, `[bootstrap.directories]`) work in a kitchen:
+`mise bootstrap` applies them inside the sandbox.
+
+```toml
+[dotfiles]
+"~/.gitconfig" = { source = "dotfiles/gitconfig", mode = "copy" }
+"~/.config/nvim" = { source = "dotfiles/nvim", mode = "symlink" }
+
+[bootstrap.files."/etc/apt/apt.conf.d/99custom"]
+source = "etc/apt.conf"
+owner = "root"
+mode = "0644"
+```
+
+Only the kitchen file itself reaches the sandbox, so microkitchen **stages**
+the host files an entry names: it copies exactly those paths in and rewrites
+each `source` to its copy. Nothing else from the project is copied. This is
+the approach mise takes for [remote bootstrap over
+SSH](https://mise.jdx.dev/bootstrap/remote.html), narrowed to the paths the
+configuration names.
+
+```
+/opt/kitchen/
+├── mise.toml            the kitchen file, owned by root
+└── files/               staged sources, owned by chef
+    ├── project/…        sources under the kitchen file's directory
+    └── <hash>/…         sources from anywhere else
+```
+
+- A `source` always names a path **on the host**, relative (to the kitchen
+  file's directory), `~/`-prefixed or absolute. It may point outside the
+  project; a missing or unreadable one is an error at its line.
+- Sources from outside the project are named by a hash of the host directory
+  holding them, so host user names and paths never enter the sandbox.
+- Staged files belong to chef, so `mode = "symlink"` entries are editable in
+  the sandbox — but those edits stay in the sandbox and are lost when it is
+  recreated. Use a mount to share a directory both ways.
+- `microkitchen validate` lists every host file that will be copied and where
+  it lands, flagging anything from outside the project.
+- Editing a staged file changes no TOML, so the contents are tracked:
+  `microkitchen remodel` copies them in again and removes what the kitchen
+  file no longer references.
+- Whether an entry makes sense in a throwaway sandbox is mise's business:
+  microkitchen reports only what stops it producing a copy. `mode = "track"`
+  keeps its history inside the sandbox, and `[dotfiles]` in a *global* host
+  config is never applied.
+
+A `mode = "template"` entry renders in the sandbox, where a secret is only the
+placeholder, so the real value never reaches the sandbox's disk — see
+[Environment variables and secrets](#environment-variables-and-secrets).
 
 ## Network access
 
@@ -382,6 +450,9 @@ in the `microkitchen-mise-cache` volume, shared by all kitchens.
   system config, so tools work from any directory (mounts included), and
   chef's global config (`~/.config/mise/config.toml`) stays chef's own for
   `mise use -g`.
+- Host files named by `[dotfiles]` and `[bootstrap.files]` are staged into
+  `/opt/kitchen/files`, and every `source` in the guest's `mise.toml` is
+  rewritten to its copy there.
 - `mise bootstrap` runs in two steps. Root installs mise and sudo and applies
   the accounts, which creates chef; then chef runs the full bootstrap, so
   `[tasks.bootstrap]` runs as chef. Tools are installed in `/opt/mise`, owned

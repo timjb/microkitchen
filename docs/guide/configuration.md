@@ -10,6 +10,7 @@ cpus   = 2                  # 1–64                                   default 2
 memory = "4G"               # up to 64G                              default "4G"
 disk   = "10G"              # root disk (flat ext4)                  default "10G"
 mounts = ["./src:/app", "./data:/data:ro"]   # host:guest[:ro]
+dotfiles = "~/.dotfiles"    # staged as mise's dotfiles.root       default none
 
 [_.microkitchen.network]
 network = "public"          # none | public | open                   default "public"
@@ -29,7 +30,14 @@ allow = ["github.com", "*.github.com"]       # hosts that receive the real value
 
 The host path is relative to the kitchen file's directory and must exist.
 Guest paths must be absolute, unique, and must not overlap
-`/root/.cache/mise`, `/root/kitchen` or `/.msb`.
+`/var/cache/mise`, `/opt/kitchen`, `/opt/mise` or `/.msb`, which microkitchen
+manages.
+
+## `dotfiles`
+
+A host directory staged into the sandbox as mise's `dotfiles.root`, so
+`[dotfiles]` entries without a `source` resolve. See
+[Dotfiles and system files](./dotfiles).
 
 ## Ports
 

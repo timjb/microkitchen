@@ -18,14 +18,16 @@ use microsandbox::sandbox::{
 
 use super::ui::Spinner;
 use super::{Context, UpArgs, lifecycle as commands, print_diagnostics};
-use crate::config::Project;
 use crate::config::hostpat::HostPattern;
-use crate::mise::render::render_guest_config;
+use crate::config::staging;
+use crate::config::{Diagnostics, Project, Source};
+use crate::mise::render::render_guest_config_with;
 use crate::sandbox::build::GUEST_ENV;
 use crate::sandbox::labels;
 use crate::sandbox::lifecycle::{self, is_active};
 use crate::sandbox::plan::{SandboxPlan, config_hash};
 use crate::sandbox::remodel::{self, Change, EnvPatch, Route};
+use crate::sandbox::staging::{self as guest_staging, StageArchive};
 use crate::state::sandbox::SandboxState;
 
 //--------------------------------------------------------------------------------------------------
@@ -164,9 +166,21 @@ pub(super) async fn run(ctx: &Context, yes: bool, recreate: bool) -> Result<Exit
     let user_pending = changes.iter().any(|c| c.field == "user");
     let guest_changed = !user_pending
         && match &state.applied_text {
-            Some(text) => render_guest_config(text)? != plan.guest_config,
+            // The applied text needs its own staging plan: `staging::plan` is
+            // pure path arithmetic, so recompute rather than persist it.
+            Some(text) => applied_guest_config(&project, text)? != plan.guest_config,
             None => true,
         };
+    // Staged file *contents* change without the kitchen file changing, so the
+    // text diff above cannot see them.
+    let stale: Vec<String> = state
+        .staged_paths
+        .iter()
+        .filter(|path| !plan.stage.roots.contains(path))
+        .cloned()
+        .collect();
+    let staged_changed =
+        !user_pending && (plan.stage.digest != state.staged_digest || !stale.is_empty());
     let dry_run = if sdk.groups().is_empty() {
         None
     } else {
@@ -182,7 +196,7 @@ pub(super) async fn run(ctx: &Context, yes: bool, recreate: bool) -> Result<Exit
         .filter(|c| c.route == Route::Recreate)
         .collect();
 
-    if changes.is_empty() && dry_run.is_none() && !guest_changed {
+    if changes.is_empty() && dry_run.is_none() && !guest_changed && !staged_changed {
         say(
             ctx,
             format!(
@@ -193,7 +207,14 @@ pub(super) async fn run(ctx: &Context, yes: bool, recreate: bool) -> Result<Exit
         return Ok(ExitCode::SUCCESS);
     }
 
-    show(ctx, &changes, dry_run.as_ref(), guest_changed);
+    show(
+        ctx,
+        &changes,
+        dry_run.as_ref(),
+        guest_changed,
+        staged_changed,
+        &plan.stage,
+    );
     if let Some(dry_run) = &dry_run {
         if !dry_run.conflicts.is_empty() {
             for conflict in &dry_run.conflicts {
@@ -260,9 +281,11 @@ pub(super) async fn run(ctx: &Context, yes: bool, recreate: bool) -> Result<Exit
 
     let running = is_active(handle.status_snapshot());
     state.applied = remodel::applied_without_recreate(&state.applied, &plan.config);
-    state.config_hash = config_hash(&state.applied);
+    state.config_hash = config_hash(&state.applied, &plan.stage.digest);
     if !user_pending {
         state.applied_text = Some(plan.kitchen_text.clone());
+        state.staged_digest = plan.stage.digest.clone();
+        state.staged_paths = plan.stage.roots.clone();
     }
     state.env_keys = plan.env.keys().cloned().collect();
     state.save(&ctx.home)?;
@@ -300,36 +323,84 @@ pub(super) async fn run(ctx: &Context, yes: bool, recreate: bool) -> Result<Exit
                 ctx,
                 format!("run `microkitchen restart` to apply the {what} changes"),
             );
-        } else if !guest_changed {
+        } else if !guest_changed && !staged_changed {
             // Otherwise the sandbox starts below, which applies them.
             say(ctx, format!("the {what} changes apply at the next start"));
         }
     }
-    if guest_changed {
-        apply_guest_config(ctx, &handle, &plan.guest_config, running).await?;
+    if guest_changed || staged_changed {
+        apply_guest_state(ctx, &handle, &plan, &stale, running).await?;
     }
     Ok(ExitCode::SUCCESS)
 }
 
-/// Update the guest's `mise.toml` and run `mise bootstrap` to apply it:
-/// tools, accounts and whatever else it declares. A stopped sandbox is
-/// started for it and stopped again.
-async fn apply_guest_config(
+/// The guest config the sandbox is running with, rendered from the kitchen
+/// file's text as last applied.
+///
+/// That text needs a staging plan of its own, since the sources it names may
+/// differ from the current ones. `staging::plan` is pure path arithmetic, so
+/// recomputing it is cheaper than persisting it; its diagnostics are dropped
+/// because the *current* file is what gets reported.
+fn applied_guest_config(project: &Project, text: &str) -> Result<String> {
+    let discovery = &project.discovery;
+    let source = Source::new(&discovery.kitchen_file, text);
+    let mut diagnostics = Diagnostics::default();
+    let staging = staging::plan(
+        &source,
+        discovery
+            .kitchen_file
+            .parent()
+            .unwrap_or(&discovery.kitchen_dir),
+        &discovery.kitchen_dir,
+        project
+            .kitchen
+            .as_ref()
+            .and_then(|k| k.config.dotfiles.as_deref()),
+        &mut diagnostics,
+    );
+    render_guest_config_with(text, &staging)
+}
+
+/// Write the guest's `mise.toml` and copy the staged files in. Staging must
+/// finish before `mise bootstrap` runs, so both are awaited here.
+async fn write_guest_state(
+    ctx: &Context,
+    sandbox: &microsandbox::Sandbox,
+    plan: &SandboxPlan,
+    stale: &[String],
+) -> Result<()> {
+    lifecycle::write_guest_config(sandbox, &plan.guest_config).await?;
+    if plan.stage.is_empty() && stale.is_empty() {
+        return Ok(());
+    }
+    Spinner::new(ctx.quiet, "Staging", &format!("{} files", plan.stage.files))
+        .run(
+            "Staged",
+            guest_staging::apply(sandbox, &plan.stage, plan.config.user, stale),
+        )
+        .await
+}
+
+/// Update the guest's `mise.toml` and staged files, then run `mise bootstrap`
+/// to apply them: tools, accounts, dotfiles and whatever else they declare.
+/// A stopped sandbox is started for it and stopped again.
+async fn apply_guest_state(
     ctx: &Context,
     handle: &SandboxHandle,
-    guest_config: &str,
+    plan: &SandboxPlan,
+    stale: &[String],
     running: bool,
 ) -> Result<()> {
     if running {
         let sandbox = handle.connect().await?;
-        lifecycle::write_guest_config(&sandbox, guest_config).await?;
+        write_guest_state(ctx, &sandbox, plan, stale).await?;
         return commands::run_bootstrap(ctx, &sandbox, handle.name()).await;
     }
 
     let handle = handle.refresh().await?;
     let sandbox = commands::start_mediated(ctx, &handle).await?;
     let result = async {
-        lifecycle::write_guest_config(&sandbox, guest_config).await?;
+        write_guest_state(ctx, &sandbox, plan, stale).await?;
         commands::run_bootstrap(ctx, &sandbox, handle.name()).await
     }
     .await;
@@ -418,6 +489,8 @@ fn show(
     changes: &[Change],
     dry_run: Option<&SandboxModificationPlan>,
     guest_changed: bool,
+    staged_changed: bool,
+    stage: &StageArchive,
 ) {
     println!("changes:");
     for change in changes {
@@ -459,6 +532,30 @@ fn show(
             "  {:<22} updated in the guest; mise bootstrap applies it",
             "mise.toml"
         );
+    }
+    if staged_changed {
+        println!(
+            "  {:<22} {} files, {}; copied into the guest, mise bootstrap applies them",
+            "staged files",
+            stage.files,
+            format_bytes(stage.bytes),
+        );
+    }
+}
+
+/// A byte count for the change table: `1.2 KiB`.
+fn format_bytes(bytes: u64) -> String {
+    const UNITS: [&str; 4] = ["B", "KiB", "MiB", "GiB"];
+    let mut size = bytes as f64;
+    let mut unit = 0;
+    while size >= 1024.0 && unit + 1 < UNITS.len() {
+        size /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{bytes} B")
+    } else {
+        format!("{size:.1} {}", UNITS[unit])
     }
 }
 
