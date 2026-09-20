@@ -411,6 +411,3 @@ to boot and bootstrap.
 Design and plan: [`specs/egress-broker-design.md`](specs/egress-broker-design.md),
 [`specs/implementation-plan.md`](specs/implementation-plan.md).
 
-## License
-
-Apache-2.0
