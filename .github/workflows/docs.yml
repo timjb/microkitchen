@@ -28,8 +28,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      # Installs Node.js and pnpm from mise.toml.
+      # The docs need only Node.js and pnpm from mise.toml, not the Rust
+      # toolchain the other workflow installs.
       - uses: jdx/mise-action@v2
+        with:
+          install_args: node pnpm
       - run: mise run docs:build
       - uses: actions/upload-pages-artifact@v3
         with:

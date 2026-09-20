@@ -29,9 +29,10 @@ macOS dialog backend is implemented but untested.
   macOS's built-in `osascript`. `notify-send` is used for notifications when
   present. Without a dialog, approvals fall back to the command line (see
   [Headless use](./network#headless-use)).
-- Rust (edition 2024) to build, plus a C toolchain and `libcap-ng`'s development
-  headers (`libcap-ng-dev` on Debian/Ubuntu, `libcap-ng-devel` on Fedora),
-  needed to link microsandbox's krun-based VMM backend.
+- Rust (edition 2024) to build — `mise install` in a clone sets up the pinned
+  toolchain — plus a C toolchain and `libcap-ng`'s development headers
+  (`libcap-ng-dev` on Debian/Ubuntu, `libcap-ng-devel` on Fedora), needed to
+  link microsandbox's krun-based VMM backend.
 
 ## Install
 
@@ -42,7 +43,7 @@ curl -fsSL -o install.sh \
 sed -i 's/^    get_latest_version$/    VERSION=v0.7.2/' install.sh && sh install.sh
 
 # microkitchen, from a clone of the repository
-cargo install --locked --path crates/microkitchen   # or: just install
+mise run install   # or: cargo install --locked --path crates/microkitchen
 ```
 
 The microsandbox installer otherwise installs the latest release; the `sed`

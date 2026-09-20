@@ -99,7 +99,7 @@ crates/test-macros/              # #[mk_test]
 crates/test-utils/               # isolated home, CLI runner, fixtures, broker test client
 scripts/guest/whodial.sh         # process attribution helper baked into the sandbox
 scripts/guest/tests/             # fixture /proc trees + shell test runner for whodial.sh
-justfile                         # build, test, test-integration, test-scripts
+mise.toml                        # tasks: build, test, test:integration, test:scripts
 ```
 
 `lib/` + `bin/` split and file-section conventions mirror the microsandbox
@@ -552,7 +552,7 @@ Conventions copied from microsandbox: `#[mk_test]` (`#[tokio::test] #[ignore]`
 `MSB_HOME` and `MICROKITCHEN_HOME` at temp dirs and reuses the installed `msb`
 via `MSB_PATH`). Run with
 `MK_TEST_ISOLATE_HOME=1 cargo nextest run --run-ignored=only --test-threads 2`
-(`just test-integration`); plain `cargo test` runs unit tests only. This machine
+(`mise run test:integration`); plain `cargo test` runs unit tests only. This machine
 has KVM and `msb doctor` passes. Integration tests set the `headless` approval
 backend and drive the broker through the admin socket via a `BrokerClient`
 in `test-utils`; a `TestKitchen` fixture writes a temp project and cleans up
@@ -586,7 +586,7 @@ sandbox, registration and files on drop.
   address parsing, IPv6 word swapping, IPv4-mapped sockets, multiple netns,
   inode → pid within the namespace, `LISTEN` excluded, UDP unconnected → not
   found, malformed rows and arguments, name sanitizing), so `cargo test`
-  covers it; `just test-scripts` runs just those
+  covers it; `mise run test:scripts` runs just those
 
 **Integration** (`crates/microkitchen/tests/`):
 
@@ -635,7 +635,7 @@ sandbox, registration and files on drop.
 6. **remodel** — diff, classification, apply/next_start/recreate. Test:
    remodel.
 7. **Polish** — README (config reference, mise caveats, dialog dependencies,
-   broker availability coupling), `justfile`, GitHub workflow (unit tests on
+   broker availability coupling), mise tasks, GitHub workflow (unit tests on
    hosted runners; integration job for a KVM runner), error-message pass.
 
 ---

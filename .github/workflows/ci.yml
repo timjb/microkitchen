@@ -18,18 +18,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
+      # Installs the Rust toolchain from mise.toml, and mise itself, which the
+      # VM-free tests run (config discovery, environment resolution).
+      - uses: jdx/mise-action@v2
       - uses: Swatinem/rust-cache@v2
       # microsandbox's krun-based VMM backend links against libcap-ng.
       - name: Install build deps
         run: sudo apt-get update && sudo apt-get install -y libcap-ng-dev
-      # The VM-free tests run mise (config discovery, environment resolution).
-      - uses: jdx/mise-action@v2
-      - run: cargo fmt --all --check
-      - run: cargo clippy --workspace --all-targets -- -D warnings
-      - run: cargo test --workspace
+      - run: mise run lint
+      - run: mise run test
 
   integration:
     name: VM integration tests
@@ -45,9 +42,8 @@ jobs:
       MSB_VERSION: v0.7.2
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
       - uses: jdx/mise-action@v2
+      - uses: Swatinem/rust-cache@v2
       - name: Install build deps
         run: sudo apt-get update && sudo apt-get install -y libcap-ng-dev
       # /dev/kvm exists but is only accessible to root and the kvm group.
@@ -65,7 +61,7 @@ jobs:
           }
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-nextest,just
+          tool: cargo-nextest
       - name: Install microsandbox ${{ env.MSB_VERSION }}
         # The installer always resolves the latest release; pin ours instead.
         run: |
@@ -80,4 +76,4 @@ jobs:
           echo "$HOME/.microsandbox/bin" >> "$GITHUB_PATH"
       - run: msb --version
       - name: VM tests
-        run: just test-integration
+        run: mise run test:integration

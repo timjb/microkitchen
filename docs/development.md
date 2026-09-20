@@ -1,12 +1,22 @@
 # Development
 
+[mise](https://mise.jdx.dev) provides the toolchains this repository pins — the
+Rust toolchain, Node.js and pnpm:
+
 ```sh
-just test              # unit tests and VM-free integration tests
-just lint              # rustfmt and clippy, warnings are errors
-just check             # both (what CI runs on hosted runners)
-just test-scripts      # the guest attribution script against fake /proc trees
-just test-integration  # VM tests: need KVM, msb and cargo-nextest
-just test-vm           # VM tests with cargo test, one at a time
+mise install           # install them
+mise run install       # build and install microkitchen into ~/.cargo/bin
+```
+
+Everything else runs as a mise task (`mise tasks` lists them):
+
+```sh
+mise run test              # unit tests and VM-free integration tests
+mise run lint              # rustfmt and clippy, warnings are errors
+mise run check             # both (what CI runs on hosted runners)
+mise run test:scripts      # the guest attribution script against fake /proc trees
+mise run test:integration  # VM tests: need KVM, msb and cargo-nextest
+mise run test:vm           # VM tests with cargo test, one at a time
 ```
 
 The VM tests boot real sandboxes against the internet; with
@@ -21,7 +31,7 @@ Design and plan:
 ## This documentation
 
 The site is built with [VitePress](https://vitepress.dev) from the Markdown in
-`docs/`. [mise](https://mise.jdx.dev) installs Node.js and pnpm:
+`docs/`:
 
 ```sh
 mise run docs:dev      # serve with live reload

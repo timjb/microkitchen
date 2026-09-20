@@ -1,6 +1,46 @@
 [tools]
+rust = { version = "1.98", profile = "default" }
 node = "24"
 pnpm = "latest"
+
+[tasks.default]
+depends = ["test"]
+
+[tasks.build]
+description = "Build the workspace"
+run = "cargo build --workspace"
+
+[tasks.test]
+description = "Unit tests and VM-free integration tests"
+run = "cargo test --workspace"
+
+[tasks."test:scripts"]
+description = "The guest attribution script (scripts/guest/whodial.sh) against fake /proc trees"
+run = "cargo test -p microkitchen --lib broker::attribution"
+
+[tasks."test:integration"]
+description = "Tests that boot microVMs (need KVM and msb)"
+env = { MK_TEST_ISOLATE_HOME = "1" }
+run = "cargo nextest run --workspace --run-ignored=only --test-threads 2"
+
+[tasks."test:vm"]
+description = "The VM tests without cargo-nextest, one at a time, against the user's microsandbox home"
+run = "cargo test --workspace -- --ignored --test-threads 1"
+
+[tasks.lint]
+description = "rustfmt and clippy, warnings are errors"
+run = [
+  "cargo fmt --all --check",
+  "cargo clippy --workspace --all-targets -- -D warnings",
+]
+
+[tasks.check]
+description = "What CI runs on hosted runners"
+depends = ["lint", "test"]
+
+[tasks.install]
+description = "Install the microkitchen binary into ~/.cargo/bin"
+run = "cargo install --locked --path crates/microkitchen"
 
 [tasks."docs:dev"]
 description = "Serve the documentation site with live reload"

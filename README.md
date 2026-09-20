@@ -43,9 +43,10 @@ dialog backend is implemented but untested.
   macOS's built-in `osascript`. `notify-send` is used for notifications when
   present. Without a dialog, approvals fall back to the command line (see
   [Headless use](#headless-use)).
-- Rust (edition 2024) to build, plus a C toolchain and `libcap-ng`'s development
-  headers (`libcap-ng-dev` on Debian/Ubuntu, `libcap-ng-devel` on Fedora),
-  needed to link microsandbox's krun-based VMM backend.
+- Rust (edition 2024) to build — `mise install` in a clone sets up the pinned
+  toolchain — plus a C toolchain and `libcap-ng`'s development headers
+  (`libcap-ng-dev` on Debian/Ubuntu, `libcap-ng-devel` on Fedora), needed to
+  link microsandbox's krun-based VMM backend.
 
 ## Install
 
@@ -56,7 +57,7 @@ curl -fsSL -o install.sh \
 sed -i 's/^    get_latest_version$/    VERSION=v0.7.2/' install.sh && sh install.sh
 
 # microkitchen
-cargo install --locked --path crates/microkitchen   # or: just install
+mise run install   # or: cargo install --locked --path crates/microkitchen
 ```
 
 The microsandbox installer otherwise installs the latest release; the `sed`
@@ -388,13 +389,18 @@ in the `microkitchen-mise-cache` volume, shared by all kitchens.
 
 ## Development
 
+[mise](https://mise.jdx.dev) provides the toolchains this repository pins (the
+Rust toolchain, Node.js and pnpm): `mise install` installs them, and
+`mise run install` builds and installs the binary into `~/.cargo/bin`.
+Everything else runs as a mise task too (`mise tasks` lists them):
+
 ```sh
-just test              # unit tests and VM-free integration tests
-just lint              # rustfmt and clippy, warnings are errors
-just check             # both (what CI runs on hosted runners)
-just test-scripts      # the guest attribution script against fake /proc trees
-just test-integration  # VM tests: need KVM, msb and cargo-nextest
-just test-vm           # VM tests with cargo test, one at a time
+mise run test              # unit tests and VM-free integration tests
+mise run lint              # rustfmt and clippy, warnings are errors
+mise run check             # both (what CI runs on hosted runners)
+mise run test:scripts      # the guest attribution script against fake /proc trees
+mise run test:integration  # VM tests: need KVM, msb and cargo-nextest
+mise run test:vm           # VM tests with cargo test, one at a time
 ```
 
 The VM tests boot real sandboxes against the internet; with
