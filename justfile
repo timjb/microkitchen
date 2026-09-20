@@ -29,3 +29,7 @@ check: lint test
 # Install the microkitchen binary into ~/.cargo/bin.
 install:
     cargo install --locked --path crates/microkitchen
+
+# Serve the documentation site with live reload.
+docs:
+    mise run docs:dev

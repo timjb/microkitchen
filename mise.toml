@@ -1,0 +1,17 @@
+[tools]
+node = "24"
+pnpm = "latest"
+
+[tasks."docs:dev"]
+description = "Serve the documentation site with live reload"
+depends = ["docs:install"]
+run = "pnpm run docs:dev"
+
+[tasks."docs:build"]
+description = "Build the documentation site into docs/.vitepress/dist"
+depends = ["docs:install"]
+run = "pnpm run docs:build"
+
+[tasks."docs:install"]
+hide = true
+run = "pnpm install --frozen-lockfile"
