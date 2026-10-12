@@ -3,7 +3,7 @@
 use std::cell::Cell;
 use std::ffi::OsStr;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Command, Output};
 use std::sync::OnceLock;
 use std::thread::JoinHandle;
@@ -283,73 +283,40 @@ pub fn stdout(output: &Output) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
 }
 
-/// Under `MK_TEST_ISOLATE_HOME`, point `MSB_HOME` at a test-only directory:
-/// `$MK_TEST_MSB_HOME`, else `$HOME/.cache/microkitchen-test-msb`.
+/// Point `MSB_HOME`, for the test process and the microkitchen commands it
+/// runs, at the microsandbox home VM tests share:
 ///
-/// The directory persists across runs so the base image is pulled once, and
-/// lives on a real disk (images and flat root disks do not fit a tmpfs). The
-/// installed `msb` and libkrunfw are reused through `MSB_PATH` and
-/// `MSB_LIBKRUNFW_PATH`, which the isolated home does not contain.
-pub fn init_isolated_home() {
+/// - Under `MK_TEST_ISOLATE_HOME`, a test-only directory: `$MK_TEST_MSB_HOME`,
+///   else `$HOME/.cache/microkitchen-test-msb`.
+/// - Otherwise the user's: `$MSB_HOME`, else microkitchen's default
+///   `$HOME/.microkitchen/microsandbox`, not each test's temporary
+///   `MICROKITCHEN_HOME`.
+///
+/// The directory persists across runs so the runtime is installed and the base
+/// image pulled once, and lives on a real disk (images and flat root disks do
+/// not fit a tmpfs). microkitchen installs the runtime there when missing;
+/// `MSB_PATH` and `MSB_LIBKRUNFW_PATH` still select another one.
+pub fn init_msb_home() {
     static DONE: OnceLock<()> = OnceLock::new();
     DONE.get_or_init(|| {
-        if std::env::var_os(ISOLATE_ENV).is_none() {
-            return;
-        }
         let env = |name: &str| {
             std::env::var_os(name)
                 .filter(|v| !v.is_empty())
                 .map(PathBuf::from)
         };
-        let original = env("MSB_HOME").or_else(|| env("HOME").map(|h| h.join(".microsandbox")));
-        let msb = env("MSB_PATH").or_else(|| find_on_path("msb")).or_else(|| {
-            original
-                .as_ref()
-                .map(|o| o.join("bin/msb"))
-                .filter(|p| p.exists())
-        });
-        let libkrunfw = env("MSB_LIBKRUNFW_PATH").or_else(|| {
-            original
-                .as_ref()
-                .map(|o| o.join("lib/libkrunfw.so"))
-                .filter(|p| p.exists())
-        });
-
-        let home = env("MK_TEST_MSB_HOME")
-            .or_else(|| env("HOME").map(|h| h.join(".cache/microkitchen-test-msb")))
-            .expect("set MK_TEST_MSB_HOME or HOME");
-        fs::create_dir_all(&home).expect("creating the isolated microsandbox home");
+        let home = if std::env::var_os(ISOLATE_ENV).is_some() {
+            env("MK_TEST_MSB_HOME")
+                .or_else(|| env("HOME").map(|h| h.join(".cache/microkitchen-test-msb")))
+                .expect("set MK_TEST_MSB_HOME or HOME")
+        } else {
+            env("MSB_HOME")
+                .or_else(|| env("HOME").map(|h| h.join(".microkitchen/microsandbox")))
+                .expect("set MSB_HOME or HOME")
+        };
+        fs::create_dir_all(&home).expect("creating the microsandbox home");
 
         // SAFETY: runs once, at the start of the first test, before the test
         // spawns threads that read the environment.
-        unsafe {
-            std::env::set_var("MSB_HOME", &home);
-            if let Some(msb) = msb {
-                std::env::set_var("MSB_PATH", msb);
-            }
-            if let Some(libkrunfw) = libkrunfw {
-                std::env::set_var("MSB_LIBKRUNFW_PATH", libkrunfw);
-            }
-        }
+        unsafe { std::env::set_var("MSB_HOME", &home) };
     });
-}
-
-fn find_on_path(program: &str) -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    std::env::split_paths(&path)
-        .map(|dir| dir.join(program))
-        .find(|candidate| is_executable(candidate))
-}
-
-fn is_executable(path: &Path) -> bool {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        path.metadata()
-            .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
-    }
-    #[cfg(not(unix))]
-    {
-        path.is_file()
-    }
 }

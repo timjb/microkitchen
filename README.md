@@ -36,8 +36,6 @@ dialog backend is implemented but untested.
 ## Requirements
 
 - Linux on x86_64 with KVM (`/dev/kvm`), or macOS on Apple Silicon (untested).
-- [microsandbox](https://microsandbox.dev) **0.7.2** (the `msb` CLI and its
-  runtime; the version must match the SDK microkitchen is built with).
 - [mise](https://mise.jdx.dev) on `PATH`, used to discover the configuration and
   resolve environment variables on the host.
 - For approval dialogs: `zenity` or `kdialog` on Linux (with a display), or
@@ -52,18 +50,16 @@ dialog backend is implemented but untested.
 ## Install
 
 ```sh
-# microsandbox, pinned to the version microkitchen is built against
-curl -fsSL -o install.sh \
-  https://github.com/superradcompany/microsandbox/releases/download/v0.7.2/install.sh
-sed -i 's/^    get_latest_version$/    VERSION=v0.7.2/' install.sh && sh install.sh
-
 # microkitchen
 mise run install   # or: cargo install --locked --path crates/microkitchen
 ```
 
-The microsandbox installer otherwise installs the latest release; the `sed`
-pins it (the CI workflow does the same). On macOS, write `sed -i ''` instead of
-`sed -i`.
+microkitchen brings its own copy of the
+[microsandbox](https://microsandbox.dev) runtime (`msb` and libkrunfw), matching
+the SDK it is built with: the first command that starts a sandbox downloads it
+into `~/.microkitchen/microsandbox`, which also holds microsandbox's images,
+database and sandboxes. A global microsandbox install in `~/.microsandbox` is
+neither needed nor used. Set `MSB_HOME` to put microsandbox's home elsewhere.
 
 ## Quick start
 
@@ -378,7 +374,9 @@ connection; nothing restarts. `~/.microkitchen/rules.toml` holds top-level
   says exactly that.
 - **UDP attribution** works only for connected sockets; others show no process.
 - **`msb start <name>`** outside microkitchen fails proxy authentication: the
-  proxy password is set by microkitchen when it starts a sandbox.
+  proxy password is set by microkitchen when it starts a sandbox. (`msb` also
+  needs `MSB_HOME=~/.microkitchen/microsandbox` to see microkitchen's
+  sandboxes at all.)
 
 ## Changing a sandbox: `remodel`
 
@@ -430,7 +428,8 @@ upstream_dns = ["1.1.1.1"]     # default: the host's /etc/resolv.conf
 ├── sandboxes/<name>/            state.json (applied configuration), proxy-secret
 ├── logs/<name>/bootstrap.log    mise bootstrap output
 ├── logs/broker.log              broker log
-└── broker/                      audit.log (one JSON line per decision), registry.json
+├── broker/                      audit.log (one JSON line per decision), registry.json
+└── microsandbox/                microsandbox's home (MSB_HOME): runtime, images, sandboxes
 ```
 
 Sandboxes are named `mk-<directory>-<hash of the kitchen file path>` and carry
@@ -470,14 +469,17 @@ mise run test              # unit tests and VM-free integration tests
 mise run lint              # rustfmt and clippy, warnings are errors
 mise run check             # both (what CI runs on hosted runners)
 mise run test:scripts      # the guest attribution script against fake /proc trees
-mise run test:integration  # VM tests: need KVM, msb and cargo-nextest
+mise run test:integration  # VM tests: need KVM and cargo-nextest
 mise run test:vm           # VM tests with cargo test, one at a time
 ```
 
-The VM tests boot real sandboxes against the internet; with
-`MK_TEST_ISOLATE_HOME=1` they use their own microsandbox home. Their kitchens
-use one vCPU: in nested virtualization, 2-vCPU guests were several times slower
-to boot and bootstrap.
+The VM tests boot real sandboxes against the internet. They share
+microkitchen's microsandbox home, `~/.microkitchen/microsandbox` (or
+`$MSB_HOME`), rather than one per test; with `MK_TEST_ISOLATE_HOME=1` they use
+their own, `~/.cache/microkitchen-test-msb`. microkitchen installs the
+microsandbox runtime into whichever is used. Their kitchens use one vCPU: in
+nested virtualization, 2-vCPU guests were several times slower to boot and
+bootstrap.
 
 Design and plan: [`specs/egress-broker-design.md`](specs/egress-broker-design.md),
 [`specs/implementation-plan.md`](specs/implementation-plan.md).

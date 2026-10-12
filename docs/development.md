@@ -15,14 +15,17 @@ mise run test              # unit tests and VM-free integration tests
 mise run lint              # rustfmt and clippy, warnings are errors
 mise run check             # both (what CI runs on hosted runners)
 mise run test:scripts      # the guest attribution script against fake /proc trees
-mise run test:integration  # VM tests: need KVM, msb and cargo-nextest
+mise run test:integration  # VM tests: need KVM and cargo-nextest
 mise run test:vm           # VM tests with cargo test, one at a time
 ```
 
-The VM tests boot real sandboxes against the internet; with
-`MK_TEST_ISOLATE_HOME=1` they use their own microsandbox home. Their kitchens
-use one vCPU: in nested virtualization, 2-vCPU guests were several times slower
-to boot and bootstrap.
+The VM tests boot real sandboxes against the internet. They share
+microkitchen's microsandbox home, `~/.microkitchen/microsandbox` (or
+`$MSB_HOME`), rather than one per test; with `MK_TEST_ISOLATE_HOME=1` they use
+their own, `~/.cache/microkitchen-test-msb`. microkitchen installs the
+microsandbox runtime into whichever is used. Their kitchens use one vCPU: in
+nested virtualization, 2-vCPU guests were several times slower to boot and
+bootstrap.
 
 Design and plan:
 [`specs/egress-broker-design.md`](https://github.com/timjb/microkitchen/blob/main/specs/egress-broker-design.md),

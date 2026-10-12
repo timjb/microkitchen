@@ -19,12 +19,12 @@ description = "The guest attribution script (scripts/guest/whodial.sh) against f
 run = "cargo test -p microkitchen --lib broker::attribution"
 
 [tasks."test:integration"]
-description = "Tests that boot microVMs (need KVM and msb)"
+description = "Tests that boot microVMs (need KVM)"
 env = { MK_TEST_ISOLATE_HOME = "1" }
 run = "cargo nextest run --workspace --run-ignored=only --test-threads 2"
 
 [tasks."test:vm"]
-description = "The VM tests without cargo-nextest, one at a time, against the user's microsandbox home"
+description = "The VM tests without cargo-nextest, one at a time, against ~/.microkitchen/microsandbox"
 run = "cargo test --workspace -- --ignored --test-threads 1"
 
 [tasks.lint]

@@ -82,6 +82,12 @@ impl Home {
         self.root.join("logs")
     }
 
+    /// `microsandbox`: microsandbox's home (`MSB_HOME`), holding its runtime,
+    /// images, database and sandboxes, unless `MSB_HOME` is set.
+    pub fn microsandbox_dir(&self) -> PathBuf {
+        self.root.join("microsandbox")
+    }
+
     /// Create the state directory, private to the user, if it does not exist.
     pub fn ensure(&self) -> Result<()> {
         if self.root.is_dir() {

@@ -1,7 +1,7 @@
 //! `#[mk_test]`: marks a test that needs a real microVM.
 //!
 //! Expands to `#[tokio::test(flavor = "multi_thread")] #[ignore]` and calls
-//! `test_utils::init_isolated_home()` first, mirroring microsandbox's
+//! `test_utils::init_msb_home()` first, mirroring microsandbox's
 //! `#[msb_test]`. Run these with `just test-integration`.
 
 use proc_macro::TokenStream;
@@ -24,7 +24,7 @@ pub fn mk_test(attr: TokenStream, item: TokenStream) -> TokenStream {
     let mut new_body = Group::new(
         Delimiter::Brace,
         quote! {
-            ::test_utils::init_isolated_home();
+            ::test_utils::init_msb_home();
             #inner
         },
     );

@@ -23,6 +23,7 @@ use crate::config::edit::RuleList;
 use crate::config::{Diagnostics, Severity};
 use crate::mise::Mise;
 use crate::sandbox::naming::sandbox_name;
+use crate::sandbox::runtime;
 use crate::state::{HOME_ENV, Home, secret};
 
 //--------------------------------------------------------------------------------------------------
@@ -221,6 +222,23 @@ pub struct Context {
 //--------------------------------------------------------------------------------------------------
 
 impl Cli {
+    /// Commands that may create or start a sandbox, and so need the runtime
+    /// and the project's proxy password.
+    pub fn may_start_sandbox(&self) -> bool {
+        matches!(
+            self.command,
+            None | Some(
+                Command::Up(_)
+                    | Command::Start
+                    | Command::Restart
+                    | Command::Shell { .. }
+                    | Command::Exec { .. }
+                    | Command::Bootstrap
+                    | Command::Remodel { .. }
+            )
+        )
+    }
+
     /// `microkitchen broker run`.
     pub fn is_broker_daemon(&self) -> bool {
         matches!(self.command, Some(Command::Broker(BrokerCommand::Run)))
@@ -270,6 +288,7 @@ pub fn init_logging(verbose: u8, quiet: bool) {
 
 pub async fn run(cli: Cli) -> Result<ExitCode> {
     let cwd = resolve_cwd(cli.dir.as_deref())?;
+    let may_start_sandbox = cli.may_start_sandbox();
     let ctx = Context {
         cwd,
         home: Home::resolve(cli.home)?,
@@ -277,6 +296,20 @@ pub async fn run(cli: Cli) -> Result<ExitCode> {
         quiet: cli.quiet,
         mise: Mise::from_env(),
     };
+
+    if may_start_sandbox {
+        let verbs = match runtime::check()? {
+            runtime::Need::Nothing => None,
+            runtime::Need::Install => Some(("Installing", "Installed")),
+            runtime::Need::Upgrade => Some(("Upgrading", "Upgraded")),
+        };
+        if let Some((label, past_tense)) = verbs {
+            let target = format!("microsandbox {}", runtime::VERSION);
+            ui::Spinner::new(ctx.quiet, label, &target)
+                .run(past_tense, runtime::install())
+                .await?;
+        }
+    }
 
     match cli.command.unwrap_or(Command::Up(UpArgs::default())) {
         Command::Up(args) => lifecycle::up(&ctx, &args).await,
@@ -316,24 +349,23 @@ pub async fn run(cli: Cli) -> Result<ExitCode> {
     }
 }
 
+/// Point microsandbox at its home under microkitchen's (see
+/// [`runtime::export_home`]). Must run before the async runtime exists, like
+/// [`export_proxy_secret`].
+pub fn export_microsandbox_home(cli: &Cli) -> Result<()> {
+    let home = Home::resolve(cli.home.clone())?;
+    // SAFETY: main calls this before creating the tokio runtime; no other
+    // threads exist yet.
+    unsafe { runtime::export_home(&home) };
+    Ok(())
+}
+
 /// Export the project's proxy password for microsandbox, which reads it from
 /// the host environment whenever it starts a sandbox. Must run before the
 /// async runtime exists: changing the environment is only sound while the
 /// process is single-threaded.
 pub fn export_proxy_secret(cli: &Cli) -> Result<()> {
-    let may_start_sandbox = matches!(
-        cli.command,
-        None | Some(
-            Command::Up(_)
-                | Command::Start
-                | Command::Restart
-                | Command::Shell { .. }
-                | Command::Exec { .. }
-                | Command::Bootstrap
-                | Command::Remodel { .. }
-        )
-    );
-    if !may_start_sandbox {
+    if !cli.may_start_sandbox() {
         return Ok(());
     }
     let cwd = resolve_cwd(cli.dir.as_deref())?;

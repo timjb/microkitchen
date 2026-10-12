@@ -13,9 +13,11 @@ fn main() -> ExitCode {
     };
     cli::init_logging(verbose, args.quiet);
 
-    // Before any thread exists: microsandbox reads the proxy password from
-    // the environment when it starts a sandbox.
-    if let Err(error) = cli::export_proxy_secret(&args) {
+    // Before any thread exists: microsandbox reads its home and the proxy
+    // password from the environment.
+    if let Err(error) =
+        cli::export_microsandbox_home(&args).and_then(|()| cli::export_proxy_secret(&args))
+    {
         cli::print_error(&error);
         return ExitCode::FAILURE;
     }

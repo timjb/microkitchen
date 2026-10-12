@@ -197,5 +197,5 @@ fn secret_entry(
             HostPattern::Address(_) | HostPattern::Network(_) => builder,
         };
     }
-    builder.allow_passthrough_for("*")
+    builder.allow_placeholder_for("*")
 }

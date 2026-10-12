@@ -92,4 +92,6 @@ connection; nothing restarts. `~/.microkitchen/rules.toml` holds top-level
   says exactly that.
 - **UDP attribution** works only for connected sockets; others show no process.
 - **`msb start <name>`** outside microkitchen fails proxy authentication: the
-  proxy password is set by microkitchen when it starts a sandbox.
+  proxy password is set by microkitchen when it starts a sandbox. (`msb` also
+  needs `MSB_HOME=~/.microkitchen/microsandbox` to see microkitchen's
+  sandboxes at all.)

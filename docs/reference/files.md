@@ -7,7 +7,8 @@
 ├── sandboxes/<name>/            state.json (applied configuration, staged digest), proxy-secret
 ├── logs/<name>/bootstrap.log    mise bootstrap output
 ├── logs/broker.log              broker log
-└── broker/                      audit.log (one JSON line per decision), registry.json
+├── broker/                      audit.log (one JSON line per decision), registry.json
+└── microsandbox/                microsandbox's home (MSB_HOME): runtime, images, sandboxes
 ```
 
 Inside a sandbox, microkitchen owns `/opt/kitchen`:

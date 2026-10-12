@@ -21,8 +21,6 @@ macOS dialog backend is implemented but untested.
 ## Requirements
 
 - Linux on x86_64 with KVM (`/dev/kvm`), or macOS on Apple Silicon (untested).
-- [microsandbox](https://microsandbox.dev) **0.7.2** (the `msb` CLI and its
-  runtime; the version must match the SDK microkitchen is built with).
 - [mise](https://mise.jdx.dev) on `PATH`, used to discover the configuration and
   resolve environment variables on the host.
 - For approval dialogs: `zenity` or `kdialog` on Linux (with a display), or
@@ -37,18 +35,16 @@ macOS dialog backend is implemented but untested.
 ## Install
 
 ```sh
-# microsandbox, pinned to the version microkitchen is built against
-curl -fsSL -o install.sh \
-  https://github.com/superradcompany/microsandbox/releases/download/v0.7.2/install.sh
-sed -i 's/^    get_latest_version$/    VERSION=v0.7.2/' install.sh && sh install.sh
-
 # microkitchen, from a clone of the repository
 mise run install   # or: cargo install --locked --path crates/microkitchen
 ```
 
-The microsandbox installer otherwise installs the latest release; the `sed`
-pins it (the CI workflow does the same). On macOS, write `sed -i ''` instead of
-`sed -i`.
+microkitchen brings its own copy of the
+[microsandbox](https://microsandbox.dev) runtime (`msb` and libkrunfw), matching
+the SDK it is built with: the first command that starts a sandbox downloads it
+into `~/.microkitchen/microsandbox`, which also holds microsandbox's images,
+database and sandboxes. A global microsandbox install in `~/.microsandbox` is
+neither needed nor used. Set `MSB_HOME` to put microsandbox's home elsewhere.
 
 ## Quick start
 
