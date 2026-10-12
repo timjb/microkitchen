@@ -28,6 +28,11 @@ pub struct MiseEnvEntry {
     /// additions such as `PATH`.
     #[serde(default)]
     pub source: Option<PathBuf>,
+    /// The tool that contributed the variable (rust's `RUSTUP_HOME`, say).
+    /// mise also gives such entries the source of the tool request, but their
+    /// values describe the host's installs, so they are not forwarded.
+    #[serde(default)]
+    pub tool: Option<String>,
 }
 
 /// Variables to hand to the sandbox.
@@ -63,7 +68,7 @@ pub fn merge(
 ) -> ResolvedEnv {
     let mut all: BTreeMap<String, String> = output
         .into_iter()
-        .filter(|(name, entry)| entry.source.is_some() && name != "PATH")
+        .filter(|(name, entry)| entry.source.is_some() && entry.tool.is_none() && name != "PATH")
         .map(|(name, entry)| (name, entry.value))
         .collect();
 
@@ -148,6 +153,7 @@ mod tests {
             MiseEnvEntry {
                 value: "mise".into(),
                 source: Some("/p/mise.toml".into()),
+                tool: None,
             },
         )]);
         let mut declarations = EnvDeclarations::default();
@@ -156,5 +162,24 @@ mod tests {
             .unwrap();
         let env = merge(output, &declarations, |_| Some("host".into()));
         assert_eq!(env.value("A"), Some("mise"));
+    }
+
+    #[test]
+    fn drops_tool_contributed_variables() {
+        let output: BTreeMap<String, MiseEnvEntry> = serde_json::from_str(
+            r#"{
+              "PLAIN": { "source": "/p/mise.toml", "value": "hello" },
+              "RUSTUP_HOME": { "source": "/p/mise.toml", "tool": "rust", "value": "/home/host/.rustup" }
+            }"#,
+        )
+        .unwrap();
+        let mut declarations = EnvDeclarations::default();
+        declarations
+            .add_document(Path::new("/p/mise.toml"), "[env]\nPLAIN = \"hello\"\n")
+            .unwrap();
+        let env = merge(output, &declarations, |_| None);
+        assert_eq!(env.value("PLAIN"), Some("hello"));
+        assert_eq!(env.value("RUSTUP_HOME"), None);
+        assert!(env.empty.is_empty());
     }
 }
