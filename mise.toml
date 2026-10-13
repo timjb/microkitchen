@@ -2,6 +2,7 @@
 rust = { version = "1.98", profile = "default" }
 node = "24"
 pnpm = "latest"
+claude = "latest"
 
 [tasks.default]
 depends = ["test"]
@@ -55,3 +56,13 @@ run = "pnpm run docs:build"
 [tasks."docs:install"]
 hide = true
 run = "pnpm install --frozen-lockfile"
+
+[bootstrap.packages]
+"apt:build-essential" = "latest"
+
+[_.microkitchen]
+mounts = ["./:/workdir"]
+
+[_.microkitchen.network]
+allow = ["api.anthropic.com", "release-assets.githubusercontent.com", "raw.githubusercontent.com", "platform.claude.com", "downloads.claude.ai", "mcp-proxy.anthropic.com", "api.github.com", "github.com", "static.rust-lang.org", "index.crates.io", "static.crates.io", "nodejs.org", "crates.io"]
+deny = ["http-intake.logs.us5.datadoghq.com"]
