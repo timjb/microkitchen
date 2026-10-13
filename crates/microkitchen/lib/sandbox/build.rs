@@ -50,15 +50,10 @@ pub const GUEST_MISE_BIN: &str = "/usr/local/bin/mise";
 pub const GUEST_PATH: &str = "/opt/mise/shims:/.msb/scripts:\
 /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 
-/// Guest `TMPDIR`: microsandbox mounts `/tmp` as a tmpfs capped at 512 MiB,
-/// too small for some tool installs; `/var/tmp` is on the root disk.
-pub const GUEST_TMPDIR: &str = "/var/tmp";
-
 /// Variables microkitchen sets in every guest; the kitchen file's `env` may
 /// override them.
 pub const GUEST_ENV: &[(&str, &str)] = &[
     ("PATH", GUEST_PATH),
-    ("TMPDIR", GUEST_TMPDIR),
     ("MISE_DATA_DIR", GUEST_MISE_DATA_DIR),
     ("MISE_CACHE_DIR", MISE_CACHE_GUEST_PATH),
     ("MISE_SYSTEM_CONFIG_FILE", GUEST_MISE_SYSTEM_CONFIG),
