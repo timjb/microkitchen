@@ -225,6 +225,7 @@ impl TestKitchen {
             .env("MISE_TRUSTED_CONFIG_PATHS", self.root.path())
             .env("MISE_CONFIG_DIR", mise.join("config"))
             .env("MISE_GLOBAL_CONFIG_FILE", mise.join("config/config.toml"))
+            .env("MISE_SYSTEM_CONFIG_FILE", mise.join("system/config.toml"))
             .env("MISE_DATA_DIR", mise.join("data"))
             .env("MISE_STATE_DIR", mise.join("state"))
             .env("MISE_CACHE_DIR", mise.join("cache"))
